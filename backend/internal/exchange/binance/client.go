@@ -231,6 +231,7 @@ func (c *Client) PlaceMarketOrder(ctx context.Context, req types.OrderRequest) (
 	q.Set("side", string(req.Side))
 	q.Set("type", "MARKET")
 	q.Set("quantity", trimFloat(req.Quantity))
+	q.Set("newOrderRespType", "RESULT")
 	if req.ReduceOnly {
 		q.Set("reduceOnly", "true")
 	}
@@ -280,6 +281,7 @@ func (c *Client) PlaceStopMarket(ctx context.Context, req types.OrderRequest) (*
 	q.Set("type", "STOP_MARKET")
 	q.Set("triggerPrice", trimFloat(req.StopPrice))
 	q.Set("closePosition", "true")
+	q.Set("workingType", "MARK_PRICE")
 	if req.ClientID != "" {
 		q.Set("clientAlgoId", req.ClientID)
 	}
@@ -297,6 +299,9 @@ func (c *Client) PlaceStopMarket(ctx context.Context, req types.OrderRequest) (*
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
+	}
+	if resp.AlgoID == 0 {
+		return nil, fmt.Errorf("algo stop missing algoId: %s", string(body))
 	}
 	return &types.OrderResult{
 		OrderID:   resp.AlgoID,
@@ -391,6 +396,14 @@ func (c *Client) exec(req *http.Request) ([]byte, error) {
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("binance http %d: %s", resp.StatusCode, string(body))
+	}
+	// Some endpoints return HTTP 200 with {"code":-4xxx,"msg":"..."}.
+	var apiErr struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if json.Unmarshal(body, &apiErr) == nil && apiErr.Code < 0 {
+		return nil, fmt.Errorf("binance %d: %s", apiErr.Code, apiErr.Msg)
 	}
 	return body, nil
 }

@@ -216,7 +216,7 @@ func (e *Engine) cycle(ctx context.Context) error {
 		if e.cfg.IsPaper() && e.paper != nil {
 			e.paper.SetTrail(sig.StopLoss)
 		} else {
-			e.syncLiveStop(ctx, pos, sig.StopLoss)
+			e.syncLiveStop(ctx, pos, sig.StopLoss, mark)
 		}
 	}
 	_ = e.persistAccount(ctx, mark)
@@ -306,8 +306,10 @@ func (e *Engine) syncStrategyPos(ctx context.Context) strategy.PositionState {
 }
 
 // syncLiveStop moves the resting STOP_MARKET order to follow the strategy trail.
-// Only ever tightens, never loosens.
-func (e *Engine) syncLiveStop(ctx context.Context, pos strategy.PositionState, stop float64) {
+// Only ever tightens, never loosens. PlaceStopMarket arms a conditional close —
+// it does not flatten immediately. If mark has already crossed the stop, we
+// market-close instead of leaving a resting order that may never fire.
+func (e *Engine) syncLiveStop(ctx context.Context, pos strategy.PositionState, stop, mark float64) {
 	if e.cfg.IsPaper() || pos.Flat() || stop <= 0 {
 		return
 	}
@@ -315,6 +317,23 @@ func (e *Engine) syncLiveStop(ctx context.Context, pos strategy.PositionState, s
 	if want <= 0 {
 		return
 	}
+
+	breached := mark > 0 && ((pos.Long && mark <= want) || (pos.Short && mark >= want))
+	if breached {
+		e.log.Warn("stop breached by mark, market close", "stop", want, "mark", mark)
+		sig := types.Signal{
+			Action: types.ActionCloseLong,
+			Reason: fmt.Sprintf("live stop %.2f breached (mark %.2f)", want, mark),
+		}
+		if pos.Short {
+			sig.Action = types.ActionCloseShort
+		}
+		if err := e.executeClose(ctx, mark, sig); err != nil {
+			e.log.Error("breach close", "err", err)
+		}
+		return
+	}
+
 	if e.liveStop > 0 {
 		if pos.Long && want <= e.liveStop {
 			return
@@ -332,19 +351,20 @@ func (e *Engine) syncLiveStop(ctx context.Context, pos strategy.PositionState, s
 		e.log.Warn("cancel stops before move", "err", err)
 		return
 	}
-	if _, err := e.client.PlaceStopMarket(ctx, types.OrderRequest{
+	res, err := e.client.PlaceStopMarket(ctx, types.OrderRequest{
 		Symbol:    e.cfg.Symbol.Name,
 		Side:      side,
 		StopPrice: want,
 		ClientID:  fmt.Sprintf("bit-sl-%d", time.Now().UnixMilli()),
-	}); err != nil {
+	})
+	if err != nil {
 		// The old stop is already cancelled, so flag it for retry next cycle.
 		e.liveStop = 0
 		e.log.Error("re-place stop, position unprotected", "err", err, "stop", want)
 		return
 	}
 	e.liveStop = want
-	e.log.Info("stop moved", "stop", want)
+	e.log.Info("stop moved", "stop", want, "algoId", res.OrderID, "status", res.Status)
 }
 
 func (e *Engine) equity(ctx context.Context, mark float64) float64 {
@@ -514,6 +534,7 @@ func (e *Engine) executeClose(ctx context.Context, mark float64, sig types.Signa
 
 	side, qty := e.openQty(ctx)
 	if qty <= 0 {
+		e.log.Warn("close skipped, no position qty")
 		return nil
 	}
 	closeSide := types.SideSell
@@ -533,7 +554,7 @@ func (e *Engine) executeClose(ctx context.Context, mark float64, sig types.Signa
 		return err
 	}
 	e.trade = tradeContext{}
-	e.log.Info("live close", "id", res.OrderID, "status", res.Status)
+	e.log.Info("live close", "id", res.OrderID, "status", res.Status, "qty", res.Quantity, "px", res.Price)
 	fillPx := res.Price
 	if fillPx == 0 {
 		fillPx = mark
