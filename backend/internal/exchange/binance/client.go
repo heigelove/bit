@@ -269,46 +269,80 @@ func (c *Client) PlaceMarketOrder(ctx context.Context, req types.OrderRequest) (
 	}, nil
 }
 
+// PlaceStopMarket places a close-position STOP_MARKET via the Algo Order API.
+// Since 2025-12-09 Binance USD-M Futures rejects conditional types on /fapi/v1/order
+// with -4120; they must go through /fapi/v1/algoOrder (triggerPrice, not stopPrice).
 func (c *Client) PlaceStopMarket(ctx context.Context, req types.OrderRequest) (*types.OrderResult, error) {
 	q := url.Values{}
+	q.Set("algoType", "CONDITIONAL")
 	q.Set("symbol", strings.ToUpper(req.Symbol))
 	q.Set("side", string(req.Side))
 	q.Set("type", "STOP_MARKET")
-	q.Set("stopPrice", trimFloat(req.StopPrice))
+	q.Set("triggerPrice", trimFloat(req.StopPrice))
 	q.Set("closePosition", "true")
 	if req.ClientID != "" {
-		q.Set("newClientOrderId", req.ClientID)
+		q.Set("clientAlgoId", req.ClientID)
 	}
-	body, err := c.doSigned(ctx, http.MethodPost, "/fapi/v1/order", q)
+	body, err := c.doSigned(ctx, http.MethodPost, "/fapi/v1/algoOrder", q)
 	if err != nil {
 		return nil, err
 	}
 	var resp struct {
-		OrderID       int64  `json:"orderId"`
-		ClientOrderID string `json:"clientOrderId"`
-		Symbol        string `json:"symbol"`
-		Side          string `json:"side"`
-		Status        string `json:"status"`
-		UpdateTime    int64  `json:"updateTime"`
+		AlgoID       int64  `json:"algoId"`
+		ClientAlgoID string `json:"clientAlgoId"`
+		Symbol       string `json:"symbol"`
+		Side         string `json:"side"`
+		AlgoStatus   string `json:"algoStatus"`
+		UpdateTime   int64  `json:"updateTime"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
 	return &types.OrderResult{
-		OrderID:   resp.OrderID,
-		ClientID:  resp.ClientOrderID,
+		OrderID:   resp.AlgoID,
+		ClientID:  resp.ClientAlgoID,
 		Symbol:    resp.Symbol,
 		Side:      types.Side(resp.Side),
-		Status:    resp.Status,
+		Status:    resp.AlgoStatus,
 		Timestamp: time.UnixMilli(resp.UpdateTime),
 	}, nil
 }
 
+// CancelAll cancels resting limit/market orders and conditional algo stops.
+// Stops live under the Algo Service and are not cleared by allOpenOrders alone.
 func (c *Client) CancelAll(ctx context.Context, symbol string) error {
+	sym := strings.ToUpper(symbol)
 	q := url.Values{}
-	q.Set("symbol", strings.ToUpper(symbol))
-	_, err := c.doSigned(ctx, http.MethodDelete, "/fapi/v1/allOpenOrders", q)
-	return err
+	q.Set("symbol", sym)
+	_, errOrders := c.doSigned(ctx, http.MethodDelete, "/fapi/v1/allOpenOrders", q)
+
+	qAlgo := url.Values{}
+	qAlgo.Set("symbol", sym)
+	_, errAlgo := c.doSigned(ctx, http.MethodDelete, "/fapi/v1/algoOpenOrders", qAlgo)
+
+	if errOrders != nil && errAlgo != nil {
+		return fmt.Errorf("cancel orders: %v; cancel algo: %v", errOrders, errAlgo)
+	}
+	// One endpoint failing while the other succeeds is common when that side
+	// has nothing open; prefer the successful path and ignore empty-book noise.
+	if errAlgo != nil && !isBenignCancelErr(errAlgo) {
+		return errAlgo
+	}
+	if errOrders != nil && !isBenignCancelErr(errOrders) {
+		return errOrders
+	}
+	return nil
+}
+
+func isBenignCancelErr(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := err.Error()
+	// -2011 unknown order / nothing to cancel; -2022 reduce-only reject noise.
+	return strings.Contains(msg, "-2011") ||
+		strings.Contains(msg, "Unknown order") ||
+		strings.Contains(msg, "No such order")
 }
 
 func (c *Client) doPublic(ctx context.Context, method, path string, q url.Values) ([]byte, error) {

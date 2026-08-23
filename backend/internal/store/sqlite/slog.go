@@ -28,14 +28,14 @@ func (h *SlogHandler) Enabled(_ context.Context, level slog.Level) bool {
 func (h *SlogHandler) Handle(ctx context.Context, r slog.Record) error {
 	attrs := make(map[string]any, len(h.attrs)+r.NumAttrs())
 	for _, a := range h.attrs {
-		attrs[a.Key] = a.Value.Any()
+		attrs[a.Key] = slogAttrValue(a.Value)
 	}
 	r.Attrs(func(a slog.Attr) bool {
 		key := a.Key
 		if h.group != "" {
 			key = h.group + "." + key
 		}
-		attrs[key] = a.Value.Any()
+		attrs[key] = slogAttrValue(a.Value)
 		return true
 	})
 	ts := r.Time
@@ -59,4 +59,15 @@ func (h *SlogHandler) WithGroup(name string) slog.Handler {
 		cp.group = name
 	}
 	return &cp
+}
+
+// slogAttrValue stringifies errors so JSON attrs are readable (errorString
+// otherwise marshals as {}).
+func slogAttrValue(v slog.Value) any {
+	if v.Kind() == slog.KindAny {
+		if err, ok := v.Any().(error); ok && err != nil {
+			return err.Error()
+		}
+	}
+	return v.Any()
 }
