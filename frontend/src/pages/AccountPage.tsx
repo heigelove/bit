@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type AccountSnapshot, type PositionSnapshot, type RiskSnapshot } from '../api/client'
+import { formatBeijingTime } from '../utils/time'
 
 function fmt(n: number | undefined | null, digits = 2) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -107,7 +108,7 @@ export function AccountPage() {
                   </tr>
                   <tr>
                     <th>更新时间</th>
-                    <td>{position.updated_at}</td>
+                    <td>{formatBeijingTime(position.updated_at)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -137,7 +138,7 @@ export function AccountPage() {
                   </tr>
                   <tr>
                     <th>更新时间</th>
-                    <td>{risk.updated_at}</td>
+                    <td>{formatBeijingTime(risk.updated_at)}</td>
                   </tr>
                 </tbody>
               </table>
