@@ -1,0 +1,13 @@
+.idea/
+.vscode/
+*.exe
+*.test
+logs/
+data/
+.env
+vendor/
+backend/bin/
+backend/logs/
+backend/data/
+frontend/node_modules/
+frontend/dist/

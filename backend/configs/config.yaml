@@ -1,0 +1,96 @@
+# ETHUSDT 永续 · 中短期趋势策略
+mode: paper # paper | live
+
+exchange:
+  rest_base: "https://fapi.binance.com"
+  ws_base: "wss://fstream.binance.com"
+  # 测试网可改为:
+  # rest_base: "https://testnet.binancefuture.com"
+  # ws_base: "wss://stream.binancefuture.com"
+  # 下面两项是「环境变量名」，不是密钥本身：
+  #   Windows PowerShell:  $env:BINANCE_API_KEY="你的key"; $env:BINANCE_API_SECRET="你的secret"
+  #   或直接在下方填写 api_key / api_secret（本地方便，勿提交到公开仓库）
+  # api_key_env: "BINANCE_API_KEY"
+  # api_secret_env: "BINANCE_API_SECRET"
+  api_key: "0Bk3juKW8YHtEiBFapebFX8k7A3q9YE4Pl1NjVoj3nMWDagVWA0Eg16913YgnMuY"
+  api_secret: "yGxfx7huaPGoAYm4amGEAZFVCDg9GWaV79wsWfVRmSnCVV3h5STtjwxmAC84JjR6"
+
+symbol:
+  name: "ETHUSDT"
+  quote: "USDT"
+  leverage: 5
+  margin_type: "CROSSED" # CROSSED | ISOLATED
+
+timeframes:
+  primary: "1h"   # 趋势与信号主周期
+  entry: "15m"    # 入场确认（预留）
+
+strategy:
+  name: "trend"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
+  ema_fast: 20
+  ema_slow: 60
+  ema_filter: 200
+  atr_period: 14
+  adx_period: 14
+  adx_min: 20          # ADX 低于此值视为震荡，不开新仓
+  atr_stop_mult: 1.5   # 初始止损 = max(摆动点, ATR * 倍数)
+  atr_trail_mult: 1.0  # 跟踪止损 ATR 倍数
+  chase_max_atr: 1.5   # 价格距 EMA20 超过此倍数 ATR 禁止追单
+  use_ema200_filter: true
+  min_bars: 220        # 至少需要的历史 K 线
+
+  # 仅 name: squeeze 时生效
+  squeeze:
+    donchian: 20             # 突破通道长度（不含当前 K 线）
+    atr_lookback: 100        # ATR% 分位统计窗口
+    atr_pct_max: 0.2         # ATR% 分位高于此值视为已扩张，不开新仓
+    atr_stop_mult: 1.2       # 初始止损距离 = ATR * 倍数，1R 由此定义
+    breakout_max_atr: 1.0    # 突破点距通道轨超过此倍数 ATR 则放弃追单
+    trend_ema: 200           # 方向偏置过滤均线
+    use_trend_filter: true
+    chandelier_period: 22    # 吊灯止损回看长度
+    chandelier_mult: 3.0     # 吊灯止损 ATR 倍数
+    tp1_r: 1.0               # 第一目标（R 倍数）
+    tp1_portion: 0.5         # 到达 TP1 平掉的仓位比例
+    breakeven_after_tp1: true # TP1 后止损抬到成本价
+    time_stop_bars: 12       # 持仓超过此根数仍无进展则离场
+    time_stop_min_r: 0.5     # 时间止损的最低进展要求
+    use_funding_filter: true
+    funding_abs_max: 0.0005  # 资金费率绝对值超过 0.05%/8h 时禁止顺该方向开仓
+
+risk:
+  risk_per_trade: 0.0075   # 单笔风险 0.75% 权益
+  max_total_risk: 0.03     # 同方向总风险上限
+  max_daily_loss_r: 2.0    # 当日亏损达 2R 停手
+  max_consecutive_loss: 3  # 连续亏损笔数停手
+  max_notional_pct: 0.7    # 名义价值上限 = 权益 * 杠杆 * 此值
+  min_qty: 0.001           # ETH 最小下单量（按交易所规则）
+  qty_precision: 3
+  price_precision: 2
+
+engine:
+  poll_interval: 10s       # paper / REST 轮询间隔
+  kline_limit: 500
+  log_dir: "logs"
+
+sqlite:
+  path: "data/bit.db"      # 日志 / 信号 / 成交
+
+redis:
+  addr: "192.168.245.128:6379"   # 账户余额 / 持仓 / 风控快照
+  password: "123456"
+  db: 8
+  prefix: "bit"
+  ttl: 24h
+
+api:
+  listen: ":8080"
+  username: "admin"
+  password: "admin123"
+  jwt_secret: "bit-dev-secret-change-me"
+  token_ttl: 24h
+
+paper:
+  initial_balance: 10000
+  fee_rate: 0.0004         # taker 约 0.04%
+  slippage_bps: 2          # 滑点 2 bps
