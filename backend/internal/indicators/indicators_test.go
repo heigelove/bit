@@ -40,3 +40,31 @@ func TestATR(t *testing.T) {
 		t.Fatalf("expected positive ATR, got %v", v)
 	}
 }
+
+func TestDMIRisingSeries(t *testing.T) {
+	n := 80
+	h := make([]float64, n)
+	l := make([]float64, n)
+	c := make([]float64, n)
+	for i := 0; i < n; i++ {
+		c[i] = 100 + float64(i)
+		h[i] = c[i] + 0.5
+		l[i] = c[i] - 0.5
+	}
+	plusDI, minusDI, adx := DMI(h, l, c, 14)
+	i := n - 1
+	if math.IsNaN(plusDI[i]) || math.IsNaN(minusDI[i]) || math.IsNaN(adx[i]) {
+		t.Fatal("expected warm DMI on rising series")
+	}
+	if plusDI[i] <= minusDI[i] {
+		t.Fatalf("+DI should dominate on rising series: +DI=%v −DI=%v", plusDI[i], minusDI[i])
+	}
+	if adx[i] <= 0 {
+		t.Fatalf("ADX should be positive, got %v", adx[i])
+	}
+	// ADX() must match DMI's ADX series.
+	only := ADX(h, l, c, 14)
+	if only[i] != adx[i] {
+		t.Fatalf("ADX wrapper mismatch: %v vs %v", only[i], adx[i])
+	}
+}

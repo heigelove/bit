@@ -57,13 +57,24 @@ func ATR(highs, lows, closes []float64, period int) []float64 {
 
 // ADX average directional index (Wilder). Returns ADX series.
 func ADX(highs, lows, closes []float64, period int) []float64 {
+	_, _, adx := DMI(highs, lows, closes, period)
+	return adx
+}
+
+// DMI returns Wilder +DI, -DI and ADX series. Used for trend direction
+// confirmation (+DI vs -DI) in addition to trend strength (ADX).
+func DMI(highs, lows, closes []float64, period int) (plusDI, minusDI, adx []float64) {
 	n := len(closes)
-	out := make([]float64, n)
-	for i := range out {
-		out[i] = math.NaN()
+	plusDI = make([]float64, n)
+	minusDI = make([]float64, n)
+	adx = make([]float64, n)
+	for i := 0; i < n; i++ {
+		plusDI[i] = math.NaN()
+		minusDI[i] = math.NaN()
+		adx[i] = math.NaN()
 	}
 	if period <= 0 || n < period*2 {
-		return out
+		return
 	}
 
 	plusDM := make([]float64, n)
@@ -98,20 +109,22 @@ func ADX(highs, lows, closes []float64, period int) []float64 {
 		if smoothTR[i] == 0 || math.IsNaN(smoothTR[i]) {
 			continue
 		}
-		plusDI := 100 * smoothPlus[i] / smoothTR[i]
-		minusDI := 100 * smoothMinus[i] / smoothTR[i]
-		den := plusDI + minusDI
+		pdi := 100 * smoothPlus[i] / smoothTR[i]
+		mdi := 100 * smoothMinus[i] / smoothTR[i]
+		plusDI[i] = pdi
+		minusDI[i] = mdi
+		den := pdi + mdi
 		if den == 0 {
 			dx[i] = 0
 			continue
 		}
-		dx[i] = 100 * math.Abs(plusDI-minusDI) / den
+		dx[i] = 100 * math.Abs(pdi-mdi) / den
 	}
 
 	// First ADX = SMA of first `period` DX values starting at index period.
 	start := period * 2
 	if start >= n {
-		return out
+		return
 	}
 	var sum float64
 	count := 0
@@ -122,16 +135,16 @@ func ADX(highs, lows, closes []float64, period int) []float64 {
 		}
 	}
 	if count == 0 {
-		return out
+		return
 	}
-	out[start-1] = sum / float64(count)
+	adx[start-1] = sum / float64(count)
 	for i := start; i < n; i++ {
-		if math.IsNaN(dx[i]) || math.IsNaN(out[i-1]) {
+		if math.IsNaN(dx[i]) || math.IsNaN(adx[i-1]) {
 			continue
 		}
-		out[i] = (out[i-1]*float64(period-1) + dx[i]) / float64(period)
+		adx[i] = (adx[i-1]*float64(period-1) + dx[i]) / float64(period)
 	}
-	return out
+	return
 }
 
 func wilderSmooth(src []float64, period int) []float64 {

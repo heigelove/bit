@@ -59,7 +59,16 @@ type StrategyConfig struct {
 	ChaseMaxATR     float64       `yaml:"chase_max_atr"`
 	UseEMA200Filter bool          `yaml:"use_ema200_filter"`
 	MinBars         int           `yaml:"min_bars"`
-	Squeeze         SqueezeConfig `yaml:"squeeze"`
+
+	// Chop filters for the trend strategy (0 / false = disabled).
+	ADXRisingBars  int     `yaml:"adx_rising_bars"`  // require ADX > ADX[N bars ago]
+	EMASepMinATR   float64 `yaml:"ema_sep_min_atr"`  // |EMA fast−slow| must exceed this × ATR
+	EMASlopeBars   int     `yaml:"ema_slope_bars"`   // slow-EMA slope lookback
+	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
+	UseDIFilter    bool    `yaml:"use_di_filter"`    // long needs +DI > −DI (and vice versa)
+	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`  // fresh EMA cross needs ADX ≥ ADXMin + bonus
+
+	Squeeze SqueezeConfig `yaml:"squeeze"`
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.

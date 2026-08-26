@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -62,5 +63,40 @@ func TestPullbackLongSignal(t *testing.T) {
 	}
 	if sig.Action == types.ActionOpenShort {
 		t.Fatalf("unexpected short on rising series: %s", sig.Reason)
+	}
+}
+
+func TestChopBlocksTangledEMAs(t *testing.T) {
+	cfg := config.StrategyConfig{
+		EMAFast: 5, EMASlow: 15, EMAFilter: 30,
+		ATRPeriod: 5, ADXPeriod: 5, ADXMin: 0,
+		ATRStopMult: 1.5, ATRTrailMult: 1.0, ChaseMaxATR: 10,
+		UseEMA200Filter: false, MinBars: 40,
+		EMASepMinATR: 50, // impossible separation → always chop
+	}
+	s := NewTrendFollow("ETHUSDT", cfg)
+
+	n := 80
+	kl := make([]types.Kline, n)
+	for i := 0; i < n; i++ {
+		// Tight sideways oscillation around 100.
+		c := 100 + float64(i%4)*0.1 - 0.15
+		kl[i] = types.Kline{
+			OpenTime:  time.Unix(int64(i*3600), 0).UTC(),
+			CloseTime: time.Unix(int64((i+1)*3600), 0).UTC(),
+			Open:      c,
+			High:      c + 0.3,
+			Low:       c - 0.3,
+			Close:     c,
+			Volume:    1000,
+			Closed:    true,
+		}
+	}
+	sig := s.Evaluate(kl, MarketContext{})
+	if sig.Action != types.ActionNone {
+		t.Fatalf("expected chop block, got %s (%s)", sig.Action, sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "tangled") && !strings.Contains(sig.Reason, "chop") {
+		t.Fatalf("expected chop reason, got %q", sig.Reason)
 	}
 }

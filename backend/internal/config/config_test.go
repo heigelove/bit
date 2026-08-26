@@ -11,8 +11,20 @@ func TestLoadShippedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Strategy.Name != "squeeze" {
-		t.Fatalf("strategy.name = %q, want squeeze", cfg.Strategy.Name)
+	if cfg.Strategy.Name != "trend" {
+		t.Fatalf("strategy.name = %q, want trend", cfg.Strategy.Name)
+	}
+	if cfg.Strategy.ADXRisingBars != 2 {
+		t.Fatalf("adx_rising_bars = %d, want 2", cfg.Strategy.ADXRisingBars)
+	}
+	if cfg.Strategy.EMASepMinATR != 0.4 {
+		t.Fatalf("ema_sep_min_atr = %v, want 0.4", cfg.Strategy.EMASepMinATR)
+	}
+	if !cfg.Strategy.UseDIFilter {
+		t.Fatal("use_di_filter should be enabled")
+	}
+	if cfg.Strategy.CrossADXBonus != 5 {
+		t.Fatalf("cross_adx_bonus = %v, want 5", cfg.Strategy.CrossADXBonus)
 	}
 
 	sq := cfg.Strategy.Squeeze
