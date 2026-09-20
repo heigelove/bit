@@ -41,6 +41,9 @@ type MarketContext struct {
 	FundingRate     float64
 	NextFundingTime time.Time
 	HasFunding      bool
+	// Entry is the smaller-timeframe candles (e.g. 15m) used by the trend
+	// strategy to time entries and trail stops. Empty means single-timeframe.
+	Entry []types.Kline
 }
 
 // Strategy turns candles plus market context into a single decision.
@@ -89,4 +92,14 @@ func anyNaN(vals ...float64) bool {
 		}
 	}
 	return false
+}
+
+// lastIndexAtOrBefore returns the last bar whose close is at or before t.
+func lastIndexAtOrBefore(bars []types.Kline, t time.Time) (int, bool) {
+	for i := len(bars) - 1; i >= 0; i-- {
+		if !bars[i].CloseTime.After(t) {
+			return i, true
+		}
+	}
+	return -1, false
 }

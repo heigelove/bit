@@ -22,29 +22,32 @@ symbol:
   margin_type: "CROSSED" # CROSSED | ISOLATED
 
 timeframes:
-  primary: "1h"   # 趋势与信号主周期
-  entry: "15m"    # 入场确认（预留）
+  primary: "1h"   # 大周期：确认趋势方向
+  entry: "15m"    # 小周期：趋势策略进场与跟踪止损（squeeze 仍只用 primary）
 
 strategy:
   name: "squeeze"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
-  ema_fast: 20
-  ema_slow: 60
-  ema_filter: 200
-  atr_period: 14
-  adx_period: 14
-  adx_min: 22          # ADX 低于此值视为震荡，不开新仓
-  atr_stop_mult: 1.5   # 初始止损 = max(摆动点, ATR * 倍数)
-  atr_trail_mult: 1.0  # 跟踪止损 ATR 倍数
-  chase_max_atr: 1.5   # 价格距 EMA20 超过此倍数 ATR 禁止追单
-  use_ema200_filter: true
-  min_bars: 220        # 至少需要的历史 K 线
-  # 震荡过滤：ADX 下行 / 均线纠缠 / DI 背离 / 慢线走平 时拒绝开仓
-  adx_rising_bars: 2       # 要求 ADX 高于 N 根前（趋势强度仍在抬升）
-  ema_sep_min_atr: 0.4     # |EMA20−EMA60| 至少 0.4×ATR，过近视为纠缠
-  ema_slope_bars: 5        # 慢线斜率回看根数
-  ema_slope_min_atr: 0.08  # 慢线 N 根变化至少 0.08×ATR，过滤走平
-  use_di_filter: true      # 多头需 +DI > −DI，空头相反
-  cross_adx_bonus: 5       # 新鲜 EMA 金叉/死叉需 ADX ≥ adx_min+5（回调入场不额外加）
+  atr_period: 14       # ATR 周期（两套策略共用）
+  min_bars: 220        # 至少需要的历史 K 线（两套策略共用）
+
+  # 仅 name: trend 时生效
+  trend:
+    ema_fast: 20
+    ema_slow: 60
+    ema_filter: 200
+    adx_period: 14
+    adx_min: 22            # ADX 低于此值视为震荡，不开新仓
+    atr_stop_mult: 1.5     # 初始止损 = max(摆动点, ATR * 倍数)
+    atr_trail_mult: 1.0    # 跟踪止损 ATR 倍数
+    chase_max_atr: 1.5     # 价格距 EMA20 超过此倍数 ATR 禁止追单
+    use_ema200_filter: true
+    # 震荡过滤：ADX 下行 / 均线纠缠 / DI 背离 / 慢线走平 时拒绝开仓
+    adx_rising_bars: 2     # 要求 ADX 高于 N 根前（趋势强度仍在抬升）
+    ema_sep_min_atr: 0.4   # |EMA20−EMA60| 至少 0.4×ATR，过近视为纠缠
+    ema_slope_bars: 5      # 慢线斜率回看根数
+    ema_slope_min_atr: 0.08 # 慢线 N 根变化至少 0.08×ATR，过滤走平
+    use_di_filter: true    # 多头需 +DI > −DI，空头相反
+    cross_adx_bonus: 5     # 新鲜 EMA 金叉/死叉需 ADX ≥ adx_min+5（回调入场不额外加）
 
   # 仅 name: squeeze 时生效
   squeeze:

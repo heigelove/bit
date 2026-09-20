@@ -59,6 +59,7 @@ func main() {
 		"symbol", cfg.Symbol.Name,
 		"strategy", cfg.Strategy.Name,
 		"primary_tf", cfg.Timeframes.Primary,
+		"entry_tf", cfg.Timeframes.Entry,
 		"leverage", cfg.Symbol.Leverage,
 		"sqlite", cfg.SQLite.Path,
 		"redis", cfg.Redis.Addr,

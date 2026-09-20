@@ -280,8 +280,8 @@ func TestSqueezeShortBreakout(t *testing.T) {
 func TestStrategyFactory(t *testing.T) {
 	for _, name := range []string{"", "trend", "squeeze"} {
 		s, err := New(name, "ETHUSDT", config.StrategyConfig{
-			EMAFast: 20, EMASlow: 60, EMAFilter: 200,
-			ATRPeriod: 14, ADXPeriod: 14, MinBars: 220,
+			ATRPeriod: 14, MinBars: 220,
+			Trend: config.TrendConfig{EMAFast: 20, EMASlow: 60, EMAFilter: 200, ADXPeriod: 14},
 		})
 		if err != nil {
 			t.Fatalf("New(%q): %v", name, err)

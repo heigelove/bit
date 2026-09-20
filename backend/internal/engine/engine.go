@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/work/bit/internal/config"
@@ -83,6 +84,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		"mode", e.cfg.Mode,
 		"symbol", e.cfg.Symbol.Name,
 		"tf", e.cfg.Timeframes.Primary,
+		"entry_tf", e.cfg.Timeframes.Entry,
 		"strategy", e.strategy.Name(),
 	)
 
@@ -191,6 +193,16 @@ func (e *Engine) cycle(ctx context.Context) error {
 	}
 
 	mkt := strategy.MarketContext{Mark: klines[len(klines)-1].Close}
+	if e.strategy.Name() == "trend" {
+		if tf := strings.TrimSpace(e.cfg.Timeframes.Entry); tf != "" && !strings.EqualFold(tf, e.cfg.Timeframes.Primary) {
+			entry, err := e.client.Klines(ctx, e.cfg.Symbol.Name, tf, e.cfg.Engine.KlineLimit)
+			if err != nil {
+				e.log.Warn("entry klines", "tf", tf, "err", err)
+			} else {
+				mkt.Entry = entry
+			}
+		}
+	}
 	if pi, err := e.client.PremiumIndex(ctx, e.cfg.Symbol.Name); err == nil {
 		mkt.Mark = pi.MarkPrice
 		mkt.FundingRate = pi.LastFundingRate

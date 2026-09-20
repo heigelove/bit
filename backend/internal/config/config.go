@@ -41,34 +41,65 @@ type SymbolConfig struct {
 }
 
 type Timeframes struct {
-	Primary string `yaml:"primary"`
-	Entry   string `yaml:"entry"`
+	Primary string `yaml:"primary"` // higher TF: trend confirmation
+	Entry   string `yaml:"entry"`   // lower TF: trend-strategy entries / trail
 }
 
 type StrategyConfig struct {
 	// Name selects the strategy implementation: "trend" or "squeeze".
-	Name            string        `yaml:"name"`
-	EMAFast         int           `yaml:"ema_fast"`
-	EMASlow         int           `yaml:"ema_slow"`
-	EMAFilter       int           `yaml:"ema_filter"`
-	ATRPeriod       int           `yaml:"atr_period"`
-	ADXPeriod       int           `yaml:"adx_period"`
-	ADXMin          float64       `yaml:"adx_min"`
-	ATRStopMult     float64       `yaml:"atr_stop_mult"`
-	ATRTrailMult    float64       `yaml:"atr_trail_mult"`
-	ChaseMaxATR     float64       `yaml:"chase_max_atr"`
-	UseEMA200Filter bool          `yaml:"use_ema200_filter"`
-	MinBars         int           `yaml:"min_bars"`
+	Name      string `yaml:"name"`
+	ATRPeriod int    `yaml:"atr_period"`
+	MinBars   int    `yaml:"min_bars"`
 
-	// Chop filters for the trend strategy (0 / false = disabled).
-	ADXRisingBars  int     `yaml:"adx_rising_bars"`  // require ADX > ADX[N bars ago]
-	EMASepMinATR   float64 `yaml:"ema_sep_min_atr"`  // |EMA fast−slow| must exceed this × ATR
-	EMASlopeBars   int     `yaml:"ema_slope_bars"`   // slow-EMA slope lookback
-	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
-	UseDIFilter    bool    `yaml:"use_di_filter"`    // long needs +DI > −DI (and vice versa)
-	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`  // fresh EMA cross needs ADX ≥ ADXMin + bonus
-
+	Trend   TrendConfig   `yaml:"trend"`
 	Squeeze SqueezeConfig `yaml:"squeeze"`
+}
+
+// TrendConfig tunes the EMA pullback / continuation strategy.
+type TrendConfig struct {
+	EMAFast         int     `yaml:"ema_fast"`
+	EMASlow         int     `yaml:"ema_slow"`
+	EMAFilter       int     `yaml:"ema_filter"`
+	ADXPeriod       int     `yaml:"adx_period"`
+	ADXMin          float64 `yaml:"adx_min"`
+	ATRStopMult     float64 `yaml:"atr_stop_mult"`
+	ATRTrailMult    float64 `yaml:"atr_trail_mult"`
+	ChaseMaxATR     float64 `yaml:"chase_max_atr"`
+	UseEMA200Filter bool    `yaml:"use_ema200_filter"`
+
+	// Chop filters (0 / false = disabled).
+	ADXRisingBars  int     `yaml:"adx_rising_bars"`   // require ADX > ADX[N bars ago]
+	EMASepMinATR   float64 `yaml:"ema_sep_min_atr"`   // |EMA fast−slow| must exceed this × ATR
+	EMASlopeBars   int     `yaml:"ema_slope_bars"`    // slow-EMA slope lookback
+	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
+	UseDIFilter    bool    `yaml:"use_di_filter"`     // long needs +DI > −DI (and vice versa)
+	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`   // fresh EMA cross needs ADX ≥ ADXMin + bonus
+}
+
+// WithDefaults fills unset positive fields. Chop gates stay 0/false = off.
+func (t TrendConfig) WithDefaults() TrendConfig {
+	if t.EMAFast <= 0 {
+		t.EMAFast = 20
+	}
+	if t.EMASlow <= 0 {
+		t.EMASlow = 60
+	}
+	if t.EMAFilter <= 0 {
+		t.EMAFilter = 200
+	}
+	if t.ADXPeriod <= 0 {
+		t.ADXPeriod = 14
+	}
+	if t.ATRStopMult <= 0 {
+		t.ATRStopMult = 1.5
+	}
+	if t.ATRTrailMult <= 0 {
+		t.ATRTrailMult = 1.0
+	}
+	if t.ChaseMaxATR <= 0 {
+		t.ChaseMaxATR = 1.5
+	}
+	return t
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.
@@ -215,6 +246,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Strategy.Name == "" {
 		cfg.Strategy.Name = "trend"
 	}
+	cfg.Strategy.Trend = cfg.Strategy.Trend.WithDefaults()
 	cfg.Strategy.Squeeze = cfg.Strategy.Squeeze.WithDefaults()
 	if cfg.Risk.MaxNotionalPct <= 0 {
 		cfg.Risk.MaxNotionalPct = 0.7
@@ -310,8 +342,8 @@ func (c *Config) Validate() error {
 	}
 	switch c.Strategy.Name {
 	case "trend", "trend_follow":
-		if c.Strategy.EMAFast >= c.Strategy.EMASlow {
-			return fmt.Errorf("ema_fast must be < ema_slow")
+		if c.Strategy.Trend.EMAFast >= c.Strategy.Trend.EMASlow {
+			return fmt.Errorf("strategy.trend.ema_fast must be < ema_slow")
 		}
 	case "squeeze", "squeeze_breakout":
 		if c.Strategy.Squeeze.ATRPctMax > 1 {
