@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -11,8 +13,8 @@ func TestLoadShippedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Strategy.Name != "squeeze" {
-		t.Fatalf("strategy.name = %q, want squeeze", cfg.Strategy.Name)
+	if cfg.Strategy.Name != "trend" {
+		t.Fatalf("strategy.name = %q, want trend", cfg.Strategy.Name)
 	}
 	if cfg.Timeframes.Primary != "1h" {
 		t.Fatalf("timeframes.primary = %q, want 1h", cfg.Timeframes.Primary)
@@ -61,6 +63,10 @@ func TestLoadShippedConfig(t *testing.T) {
 	if cfg.Risk.MaxNotionalPct != 0.7 {
 		t.Fatalf("max_notional_pct = %v, want 0.7", cfg.Risk.MaxNotionalPct)
 	}
+	cfg.Mode = "live"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("live mode should accept yaml api_key/api_secret: %v", err)
+	}
 }
 
 func TestFiltersDefaultOn(t *testing.T) {
@@ -84,4 +90,88 @@ func TestValidateRejectsUnknownStrategy(t *testing.T) {
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected validation error for unknown strategy")
 	}
+}
+
+func TestLiveModeUsesYamlKeys(t *testing.T) {
+	path := writeLiveYAML(t, `
+mode: live
+exchange:
+  api_key_env: BIT_TEST_YAML_KEY
+  api_secret_env: BIT_TEST_YAML_SECRET
+  api_key: yaml-key
+  api_secret: yaml-secret
+symbol:
+  name: ETHUSDT
+  leverage: 5
+strategy:
+  name: trend
+risk:
+  risk_per_trade: 0.01
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Exchange.APIKey != "yaml-key" || cfg.Exchange.APISecret != "yaml-secret" {
+		t.Fatalf("keys = %q / %q", cfg.Exchange.APIKey, cfg.Exchange.APISecret)
+	}
+}
+
+func TestLiveModeUsesDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+mode: live
+exchange:
+  api_key_env: BIT_TEST_DOTENV_KEY
+  api_secret_env: BIT_TEST_DOTENV_SECRET
+symbol:
+  name: ETHUSDT
+  leverage: 5
+strategy:
+  name: trend
+risk:
+  risk_per_trade: 0.01
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("BIT_TEST_DOTENV_KEY=from-dotenv\nBIT_TEST_DOTENV_SECRET=from-dotenv-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Exchange.APIKey != "from-dotenv" || cfg.Exchange.APISecret != "from-dotenv-secret" {
+		t.Fatalf("keys = %q / %q", cfg.Exchange.APIKey, cfg.Exchange.APISecret)
+	}
+}
+
+func TestLiveModeMissingCredentials(t *testing.T) {
+	path := writeLiveYAML(t, `
+mode: live
+exchange:
+  api_key_env: BIT_TEST_MISSING_KEY
+  api_secret_env: BIT_TEST_MISSING_SECRET
+symbol:
+  name: ETHUSDT
+  leverage: 5
+strategy:
+  name: trend
+risk:
+  risk_per_trade: 0.01
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected live mode to require credentials")
+	}
+}
+
+func writeLiveYAML(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
