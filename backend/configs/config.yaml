@@ -26,7 +26,7 @@ timeframes:
   entry: "15m"    # 入场确认（预留）
 
 strategy:
-  name: "trend"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
+  name: "squeeze"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
   ema_fast: 20
   ema_slow: 60
   ema_filter: 200
