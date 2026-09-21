@@ -1,12 +1,8 @@
 package config
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -236,7 +232,6 @@ type APIConfig struct {
 }
 
 func Load(path string) (*Config, error) {
-	loadDotEnv(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -319,14 +314,11 @@ func Load(path string) (*Config, error) {
 	if cfg.Exchange.APISecretEnv == "" {
 		cfg.Exchange.APISecretEnv = "BINANCE_API_SECRET"
 	}
-	cfg.Exchange.APIKey = strings.TrimSpace(cfg.Exchange.APIKey)
-	cfg.Exchange.APISecret = strings.TrimSpace(cfg.Exchange.APISecret)
-	// Environment variables (including values loaded from .env) override yaml
-	// literals when present.
-	if v := strings.TrimSpace(os.Getenv(cfg.Exchange.APIKeyEnv)); v != "" {
+	// Environment variables override yaml literals when present.
+	if v := os.Getenv(cfg.Exchange.APIKeyEnv); v != "" {
 		cfg.Exchange.APIKey = v
 	}
-	if v := strings.TrimSpace(os.Getenv(cfg.Exchange.APISecretEnv)); v != "" {
+	if v := os.Getenv(cfg.Exchange.APISecretEnv); v != "" {
 		cfg.Exchange.APISecret = v
 	}
 	if err := cfg.Validate(); err != nil {
@@ -376,68 +368,3 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) IsPaper() bool { return c.Mode == "paper" }
-
-// loadDotEnv reads KEY=VALUE pairs from nearby .env files into the process
-// environment when the key is not already set. Existing env vars always win.
-func loadDotEnv(configPath string) {
-	seen := make(map[string]struct{})
-	candidates := []string{
-		".env",
-		filepath.Join(filepath.Dir(configPath), ".env"),
-		filepath.Join(filepath.Dir(configPath), "..", ".env"),
-	}
-	for _, p := range candidates {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			continue
-		}
-		if _, ok := seen[abs]; ok {
-			continue
-		}
-		seen[abs] = struct{}{}
-		applyEnvFile(abs)
-	}
-}
-
-func applyEnvFile(path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	first := true
-	for sc.Scan() {
-		line := sc.Bytes()
-		if first {
-			line = bytes.TrimPrefix(line, []byte{0xEF, 0xBB, 0xBF})
-			first = false
-		}
-		s := strings.TrimSpace(string(line))
-		if s == "" || strings.HasPrefix(s, "#") {
-			continue
-		}
-		if strings.HasPrefix(s, "export ") {
-			s = strings.TrimSpace(strings.TrimPrefix(s, "export "))
-		}
-		k, v, ok := strings.Cut(s, "=")
-		if !ok {
-			continue
-		}
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		if strings.TrimSpace(os.Getenv(k)) != "" {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if len(v) >= 2 {
-			if q := v[0]; (q == '"' || q == '\'') && v[len(v)-1] == q {
-				v = v[1 : len(v)-1]
-			}
-		}
-		_ = os.Setenv(k, v)
-	}
-}

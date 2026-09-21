@@ -26,7 +26,7 @@ timeframes:
   entry: "15m"    # 小周期：趋势策略进场与跟踪止损（squeeze 仍只用 primary）
 
 strategy:
-  name: "trend"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
+  name: "squeeze"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
   atr_period: 14       # ATR 周期（两套策略共用）
   min_bars: 220        # 至少需要的历史 K 线（两套策略共用）
 
