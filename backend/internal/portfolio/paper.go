@@ -110,7 +110,7 @@ func (p *PaperAccount) open(pos types.PositionSide, side types.Side, price, qty 
 	p.entry = px
 	fill := types.TradeFill{
 		Time: now, Symbol: p.symbol, Side: side,
-		Quantity: qty, Price: px, Fee: fee, Reason: reason,
+		Quantity: qty, Price: px, Fee: fee, PNL: -fee, Reason: reason,
 	}
 	p.fills = append(p.fills, fill)
 	return &fill, nil

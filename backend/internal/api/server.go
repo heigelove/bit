@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,6 +58,7 @@ func (s *Server) routes() {
 		{
 			auth.GET("/auth/me", s.handleMe)
 			auth.GET("/account", s.handleAccount)
+			auth.GET("/equity-curve", s.handleEquityCurve)
 			auth.GET("/logs", s.handleLogs)
 			auth.GET("/trades", s.handleTrades)
 			auth.GET("/signals", s.handleSignals)
@@ -140,6 +142,65 @@ func (s *Server) handleAccount(c *gin.Context) {
 		"account":  acc,
 		"position": pos,
 		"risk":     risk,
+	})
+}
+
+func (s *Server) handleEquityCurve(c *gin.Context) {
+	mode := c.DefaultQuery("mode", s.cfg.Mode)
+	symbol := c.DefaultQuery("symbol", s.cfg.Symbol.Name)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
+
+	initial := 0.0
+	if mode == "paper" {
+		initial = s.cfg.Paper.InitialBalance
+		if initial <= 0 {
+			initial = 10000
+		}
+	}
+
+	curve, err := s.db.ListEquityCurve(c.Request.Context(), symbol, mode, initial, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Live: shift curve so the last realized wallet matches Redis balance.
+	if initial == 0 && s.redis != nil {
+		if acc, err := s.redis.GetAccount(c.Request.Context(), mode, symbol); err == nil && acc != nil {
+			shift := acc.Balance - curve.TotalPNL
+			curve.InitialBalance = shift
+			for i := range curve.Points {
+				curve.Points[i].Equity += shift
+			}
+		}
+	}
+
+	if len(curve.Points) > 0 && curve.Points[0].TS == "" {
+		if len(curve.Points) > 1 {
+			curve.Points[0].TS = curve.Points[1].TS
+		} else {
+			curve.Points[0].TS = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+	}
+
+	if s.redis != nil {
+		if acc, err := s.redis.GetAccount(c.Request.Context(), mode, symbol); err == nil && acc != nil {
+			last := curve.Points[len(curve.Points)-1]
+			if math.Abs(acc.Equity-last.Equity) > 1e-6 {
+				curve.Points = append(curve.Points, sqlite.EquityPoint{
+					TS:            acc.UpdatedAt,
+					Equity:        acc.Equity,
+					CumulativePNL: acc.Equity - curve.InitialBalance,
+					TradePNL:      0,
+				})
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"mode":   mode,
+		"symbol": symbol,
+		"curve":  curve,
 	})
 }
 

@@ -356,6 +356,66 @@ table.data tbody tr:hover {
   gap: 14px;
 }
 
+.equity-panel {
+  margin-bottom: 18px;
+  padding-bottom: 8px;
+  animation: rise 0.45s ease both;
+}
+
+.equity-sub {
+  margin: 4px 18px 0;
+  font-size: 0.78rem;
+}
+
+.equity-chart {
+  padding: 8px 12px 12px;
+  position: relative;
+}
+
+.equity-chart-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 4px 6px 8px;
+  font-size: 0.85rem;
+}
+
+.equity-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.equity-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.equity-baseline {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.55;
+}
+
+.equity-axis {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.equity-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 0 rgba(20, 32, 26, 0.04));
+}
+
+.equity-area {
+  animation: fade-in 0.5s ease both;
+}
+
 .section-title {
   margin: 0;
   padding: 16px 18px 0;

@@ -143,6 +143,108 @@ func (s *Store) ListTrades(ctx context.Context, page, size int, symbol string) (
 	return &PageResult[TradeRow]{Items: items, Total: total, Page: page, Size: size}, rows.Err()
 }
 
+// EquityPoint is one sample on the reconstructed wallet equity curve.
+type EquityPoint struct {
+	TS             string  `json:"ts"`
+	Equity         float64 `json:"equity"`
+	CumulativePNL  float64 `json:"cumulative_pnl"`
+	TradePNL       float64 `json:"trade_pnl"`
+}
+
+// EquityCurve is wallet equity reconstructed from trade PnL (opens store −fee).
+type EquityCurve struct {
+	InitialBalance float64       `json:"initial_balance"`
+	TotalPNL       float64       `json:"total_pnl"`
+	Points         []EquityPoint `json:"points"`
+}
+
+// ListEquityCurve rebuilds equity over time from trades (oldest → newest).
+// limit caps how many of the most recent trades are included (0 = all, max 5000).
+func (s *Store) ListEquityCurve(ctx context.Context, symbol, mode string, initialBalance float64, limit int) (*EquityCurve, error) {
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+
+	where := "1=1"
+	args := []any{}
+	if symbol != "" {
+		where += " AND symbol = ?"
+		args = append(args, symbol)
+	}
+	if mode != "" {
+		where += " AND mode = ?"
+		args = append(args, mode)
+	}
+
+	priorPNL := 0.0
+	var q string
+	queryArgs := append([]any{}, args...)
+	if limit > 0 {
+		// Equity at the left edge of the window must include older trades.
+		priorQ := `SELECT COALESCE(SUM(pnl), 0) FROM trades
+			WHERE ` + where + ` AND id < COALESCE((
+				SELECT MIN(id) FROM (
+					SELECT id FROM trades WHERE ` + where + ` ORDER BY id DESC LIMIT ?
+				)
+			), 0)`
+		priorArgs := append(append([]any{}, args...), args...)
+		priorArgs = append(priorArgs, limit)
+		if err := s.db.QueryRowContext(ctx, priorQ, priorArgs...).Scan(&priorPNL); err != nil {
+			return nil, err
+		}
+
+		q = `SELECT ts, pnl FROM (
+		       SELECT id, ts, pnl FROM trades WHERE ` + where + ` ORDER BY id DESC LIMIT ?
+		     ) sub ORDER BY id ASC`
+		queryArgs = append(queryArgs, limit)
+	} else {
+		q = `SELECT ts, pnl FROM trades WHERE ` + where + ` ORDER BY id ASC`
+	}
+
+	rows, err := s.db.QueryContext(ctx, q, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := &EquityCurve{
+		InitialBalance: initialBalance,
+		Points:         make([]EquityPoint, 0, 64),
+	}
+	cum := priorPNL
+	equity := initialBalance + cum
+	out.Points = append(out.Points, EquityPoint{
+		TS:            "",
+		Equity:        equity,
+		CumulativePNL: cum,
+		TradePNL:      0,
+	})
+
+	for rows.Next() {
+		var ts string
+		var pnl float64
+		if err := rows.Scan(&ts, &pnl); err != nil {
+			return nil, err
+		}
+		cum += pnl
+		equity = initialBalance + cum
+		out.Points = append(out.Points, EquityPoint{
+			TS:            ts,
+			Equity:        equity,
+			CumulativePNL: cum,
+			TradePNL:      pnl,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out.TotalPNL = cum
+	return out, nil
+}
+
 func (s *Store) ListSignals(ctx context.Context, page, size int) (*PageResult[SignalRow], error) {
 	if page < 1 {
 		page = 1

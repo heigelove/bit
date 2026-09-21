@@ -56,6 +56,19 @@ export type TradeRow = {
   order_id: string
 }
 
+export type EquityPoint = {
+  ts: string
+  equity: number
+  cumulative_pnl: number
+  trade_pnl: number
+}
+
+export type EquityCurve = {
+  initial_balance: number
+  total_pnl: number
+  points: EquityPoint[]
+}
+
 const TOKEN_KEY = 'bit_token'
 
 export function getToken() {
@@ -100,6 +113,16 @@ export const api = {
       risk: RiskSnapshot | null
       warning?: string
     }>('/api/account')
+  },
+  equityCurve(symbol = '', mode = '') {
+    const q = new URLSearchParams()
+    if (symbol) q.set('symbol', symbol)
+    if (mode) q.set('mode', mode)
+    q.set('limit', '500')
+    const qs = q.toString()
+    return request<{ mode: string; symbol: string; curve: EquityCurve }>(
+      `/api/equity-curve${qs ? `?${qs}` : ''}`,
+    )
   },
   logs(page: number, size: number, level = '') {
     const q = new URLSearchParams({ page: String(page), size: String(size) })

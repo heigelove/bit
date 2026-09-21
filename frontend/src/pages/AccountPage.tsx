@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type AccountSnapshot, type PositionSnapshot, type RiskSnapshot } from '../api/client'
+import { api, type AccountSnapshot, type EquityCurve, type PositionSnapshot, type RiskSnapshot } from '../api/client'
+import { EquityChart } from '../components/EquityChart'
 import { formatBeijingTime } from '../utils/time'
 
 function fmt(n: number | undefined | null, digits = 2) {
@@ -11,6 +12,7 @@ export function AccountPage() {
   const [account, setAccount] = useState<AccountSnapshot | null>(null)
   const [position, setPosition] = useState<PositionSnapshot | null>(null)
   const [risk, setRisk] = useState<RiskSnapshot | null>(null)
+  const [curve, setCurve] = useState<EquityCurve | null>(null)
   const [meta, setMeta] = useState({ mode: '', symbol: '', warning: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -24,6 +26,12 @@ export function AccountPage() {
       setPosition(res.position)
       setRisk(res.risk)
       setMeta({ mode: res.mode, symbol: res.symbol, warning: res.warning || '' })
+      try {
+        const eq = await api.equityCurve(res.symbol, res.mode)
+        setCurve(eq.curve)
+      } catch {
+        setCurve(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
     } finally {
@@ -76,6 +84,20 @@ export function AccountPage() {
           <div className="hint">Available</div>
         </div>
       </div>
+
+      <section className="panel equity-panel">
+        <h2 className="section-title">收益曲线</h2>
+        <p className="equity-sub muted mono">按成交累计重建钱包权益（含开仓手续费）</p>
+        {loading && !curve ? (
+          <div className="empty">加载中…</div>
+        ) : (
+          <EquityChart
+            points={curve?.points ?? []}
+            initialBalance={curve?.initial_balance ?? 0}
+            totalPnl={curve?.total_pnl ?? 0}
+          />
+        )}
+      </section>
 
       <div className="grid-2">
         <section className="panel">
