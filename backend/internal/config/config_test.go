@@ -58,6 +58,18 @@ func TestLoadShippedConfig(t *testing.T) {
 	if !sq.FundingFilterEnabled() || !sq.TrendFilterEnabled() {
 		t.Fatal("squeeze filters should be enabled")
 	}
+	if sq.ReentryATR != 0.25 {
+		t.Fatalf("squeeze.reentry_atr = %v, want 0.25", sq.ReentryATR)
+	}
+	if sq.ReentryCooldown != 2 {
+		t.Fatalf("squeeze.reentry_cooldown = %d, want 2", sq.ReentryCooldown)
+	}
+	if !sq.ResetRequired() {
+		t.Fatal("squeeze require_reset should be enabled")
+	}
+	if cfg.Strategy.Trend.ReentryCooldown != 4 {
+		t.Fatalf("trend.reentry_cooldown = %d, want 4", cfg.Strategy.Trend.ReentryCooldown)
+	}
 	if cfg.Risk.MaxNotionalPct != 0.7 {
 		t.Fatalf("max_notional_pct = %v, want 0.7", cfg.Risk.MaxNotionalPct)
 	}

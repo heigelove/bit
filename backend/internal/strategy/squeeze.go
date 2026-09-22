@@ -28,6 +28,7 @@ type SqueezeBreakout struct {
 
 	minBars int
 	pos     PositionState
+	lock    ReentryLock
 }
 
 func NewSqueezeBreakout(sym string, cfg config.StrategyConfig) *SqueezeBreakout {
@@ -57,7 +58,14 @@ func NewSqueezeBreakout(sym string, cfg config.StrategyConfig) *SqueezeBreakout 
 
 func (s *SqueezeBreakout) Name() string { return "squeeze" }
 
-func (s *SqueezeBreakout) Sync(pos PositionState) { s.pos = pos }
+func (s *SqueezeBreakout) Sync(pos PositionState) {
+	s.lock.ArmOnFlatten(s.pos, pos)
+	s.pos = pos
+}
+
+func (s *SqueezeBreakout) ReentryLock() ReentryLock { return s.lock }
+
+func (s *SqueezeBreakout) RestoreReentryLock(l ReentryLock) { s.lock = l }
 
 func (s *SqueezeBreakout) Evaluate(klines []types.Kline, mkt MarketContext) types.Signal {
 	sig := types.Signal{Symbol: s.sym, Action: types.ActionNone}
@@ -98,7 +106,7 @@ func (s *SqueezeBreakout) Evaluate(klines []types.Kline, mkt MarketContext) type
 	if !s.pos.Flat() {
 		return s.manage(sig, bars, highs, lows, atr, mid, i)
 	}
-	return s.entry(sig, atrPct, atr, up, dn, trend, mkt, i)
+	return s.entry(sig, bars, closes, atrPct, atr, up, dn, trend, mkt, i)
 }
 
 // manage handles an open position: trail, structural failure, time stop, TP1.
@@ -136,6 +144,7 @@ func (s *SqueezeBreakout) manage(sig types.Signal, bars []types.Kline, highs, lo
 		if (long && price <= trail) || (!long && price >= trail) {
 			sig.Action = closeAction
 			sig.Reason = fmt.Sprintf("trail stop %.2f hit", trail)
+			s.lock.ArmOnFlatten(s.pos, PositionState{})
 			return sig
 		}
 	}
@@ -145,6 +154,7 @@ func (s *SqueezeBreakout) manage(sig types.Signal, bars []types.Kline, highs, lo
 		if (long && price < mid[i]) || (!long && price > mid[i]) {
 			sig.Action = closeAction
 			sig.Reason = "closed back inside channel"
+			s.lock.ArmOnFlatten(s.pos, PositionState{})
 			return sig
 		}
 	}
@@ -152,6 +162,7 @@ func (s *SqueezeBreakout) manage(sig types.Signal, bars []types.Kline, highs, lo
 	if held, ok := s.barsHeld(bars, i); ok && held >= s.sq.TimeStopBars && progressR < s.sq.TimeStopMinR {
 		sig.Action = closeAction
 		sig.Reason = fmt.Sprintf("time stop %d bars at %.2fR", held, progressR)
+		s.lock.ArmOnFlatten(s.pos, PositionState{})
 		return sig
 	}
 
@@ -196,8 +207,16 @@ func (s *SqueezeBreakout) ratchetTrail(highs, lows, atr []float64, i int, long b
 }
 
 // entry applies the squeeze, breakout, trend and funding gates in order.
-func (s *SqueezeBreakout) entry(sig types.Signal, atrPct, atr, up, dn, trend []float64, mkt MarketContext, i int) types.Signal {
+func (s *SqueezeBreakout) entry(sig types.Signal, bars []types.Kline, closes, atrPct, atr, up, dn, trend []float64, mkt MarketContext, i int) types.Signal {
 	price := sig.Price
+
+	inside := price <= up[i] && price >= dn[i]
+	if s.lock.Armed {
+		s.lock.Stamp(sig.Time)
+		if inside {
+			s.lock.MarkReset()
+		}
+	}
 
 	// Measure compression on the bar before the breakout. A decisive breakout
 	// bar has a large true range by construction, so including it would let the
@@ -212,10 +231,21 @@ func (s *SqueezeBreakout) entry(sig types.Signal, atrPct, atr, up, dn, trend []f
 		return sig
 	}
 
+	// A breakout is a cross, not a state: staying outside the channel after a
+	// stop must not keep re-firing. Require the previous close to have been
+	// on or inside the prior edge.
 	breakUp := price > up[i]
 	breakDown := price < dn[i]
+	if i > 0 && !math.IsNaN(up[i-1]) && !math.IsNaN(dn[i-1]) {
+		breakUp = breakUp && closes[i-1] <= up[i-1]
+		breakDown = breakDown && closes[i-1] >= dn[i-1]
+	}
 	if !breakUp && !breakDown {
-		sig.Reason = fmt.Sprintf("inside channel %.2f-%.2f", dn[i], up[i])
+		if inside {
+			sig.Reason = fmt.Sprintf("inside channel %.2f-%.2f", dn[i], up[i])
+		} else {
+			sig.Reason = "outside channel, no fresh cross"
+		}
 		return sig
 	}
 
@@ -249,6 +279,12 @@ func (s *SqueezeBreakout) entry(sig types.Signal, atrPct, atr, up, dn, trend []f
 		}
 	}
 
+	held := barsOnOrAfter(bars, s.lock.BarTime)
+	if reason := s.lock.Block(long, price, edge, atr[i], s.sq.ReentryATR, s.sq.ReentryCooldown, held, s.sq.ResetRequired()); reason != "" {
+		sig.Reason = reason
+		return sig
+	}
+
 	dist := s.sq.ATRStopMult * atr[i]
 	if long {
 		sig.Action = types.ActionOpenLong
@@ -257,6 +293,7 @@ func (s *SqueezeBreakout) entry(sig types.Signal, atrPct, atr, up, dn, trend []f
 		sig.Action = types.ActionOpenShort
 		sig.StopLoss = price + dist
 	}
+	s.lock.NoteEntry(long, price, edge)
 	sig.Reason = fmt.Sprintf("squeeze breakout, ATR%% rank %.2f", rank)
 	return sig
 }

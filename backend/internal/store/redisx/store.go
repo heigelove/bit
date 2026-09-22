@@ -112,6 +112,10 @@ func (s *Store) riskKey(mode string) string {
 	return fmt.Sprintf("%s:risk:%s", s.prefix, mode)
 }
 
+func (s *Store) reentryKey(mode, symbol string) string {
+	return fmt.Sprintf("%s:reentry:%s:%s", s.prefix, mode, symbol)
+}
+
 func (s *Store) SaveAccount(ctx context.Context, mode, symbol string, st types.AccountState) error {
 	upnl := 0.0
 	for _, p := range st.Positions {
@@ -278,3 +282,41 @@ func (s *Store) GetEquityHint(ctx context.Context, mode, symbol string) (float64
 }
 
 func (s *Store) Client() *redis.Client { return s.rdb }
+
+// ReentrySnapshot caches the last-exit lock so a restart cannot re-open the
+// same stop-hunted level.
+type ReentrySnapshot struct {
+	Armed   bool    `json:"armed"`
+	Long    bool    `json:"long"`
+	Entry   float64 `json:"entry"`
+	Edge    float64 `json:"edge"`
+	BarTime string  `json:"bar_time"`
+	Reset   bool    `json:"reset"`
+}
+
+func (s *Store) SaveReentry(ctx context.Context, mode, symbol string, snap ReentrySnapshot) error {
+	b, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
+	return s.rdb.Set(ctx, s.reentryKey(mode, symbol), b, s.ttl).Err()
+}
+
+func (s *Store) GetReentry(ctx context.Context, mode, symbol string) (*ReentrySnapshot, error) {
+	b, err := s.rdb.Get(ctx, s.reentryKey(mode, symbol)).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var snap ReentrySnapshot
+	if err := json.Unmarshal(b, &snap); err != nil {
+		return nil, err
+	}
+	return &snap, nil
+}
+
+func (s *Store) ClearReentry(ctx context.Context, mode, symbol string) error {
+	return s.rdb.Del(ctx, s.reentryKey(mode, symbol)).Err()
+}

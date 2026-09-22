@@ -48,6 +48,10 @@ strategy:
     ema_slope_min_atr: 0.08 # 慢线 N 根变化至少 0.08×ATR，过滤走平
     use_di_filter: true    # 多头需 +DI > −DI，空头相反
     cross_adx_bonus: 5     # 新鲜 EMA 金叉/死叉需 ADX ≥ adx_min+5（回调入场不额外加）
+    # 止损后禁止立刻在同一 EMA 再进
+    reentry_atr: 0.25      # |现价−上次开仓价| 小于此×ATR 则拒绝
+    reentry_cooldown: 4    # 离场后至少再等 N 根入场周期 K 线（15m）
+    require_reset: true    # 必须先出现一根完全离开 EMA20 的 K 线
 
   # 仅 name: squeeze 时生效
   squeeze:
@@ -67,6 +71,10 @@ strategy:
     time_stop_min_r: 0.5     # 时间止损的最低进展要求
     use_funding_filter: true
     funding_abs_max: 0.0005  # 资金费率绝对值超过 0.05%/8h 时禁止顺该方向开仓
+    # 止损后禁止立刻在同一突破位再进
+    reentry_atr: 0.25        # |现价−上次开仓价| 或 |通道沿−上次沿| 小于此×ATR 则拒绝
+    reentry_cooldown: 2      # 离场后至少再等 N 根主周期 K 线
+    require_reset: true      # 必须先收盘回到通道内，才允许下一次穿越
 
 risk:
   risk_per_trade: 0.0075   # 单笔风险 0.75% 权益

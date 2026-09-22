@@ -74,6 +74,11 @@ type TrendConfig struct {
 	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
 	UseDIFilter    bool    `yaml:"use_di_filter"`     // long needs +DI > −DI (and vice versa)
 	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`   // fresh EMA cross needs ADX ≥ ADXMin + bonus
+
+	// Re-entry gates after a stop: skip the same EMA touch until it resets.
+	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
+	ReentryCooldown int     `yaml:"reentry_cooldown"` // entry-TF bars to wait after an exit
+	RequireReset    *bool   `yaml:"require_reset"`    // need a bar that fully leaves EMA20 first
 }
 
 // WithDefaults fills unset positive fields. Chop gates stay 0/false = off.
@@ -99,7 +104,17 @@ func (t TrendConfig) WithDefaults() TrendConfig {
 	if t.ChaseMaxATR <= 0 {
 		t.ChaseMaxATR = 1.5
 	}
+	if t.ReentryATR <= 0 {
+		t.ReentryATR = 0.25
+	}
+	if t.ReentryCooldown <= 0 {
+		t.ReentryCooldown = 4
+	}
 	return t
+}
+
+func (t TrendConfig) ResetRequired() bool {
+	return t.RequireReset == nil || *t.RequireReset
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.
@@ -128,6 +143,11 @@ type SqueezeConfig struct {
 
 	UseFundingFilter *bool   `yaml:"use_funding_filter"` // block entries into a crowded side
 	FundingAbsMax    float64 `yaml:"funding_abs_max"`    // per-interval funding rate threshold
+
+	// Re-entry gates after a stop: the same Donchian edge cannot be traded twice.
+	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| or |edge−last edge| < this × ATR
+	ReentryCooldown int     `yaml:"reentry_cooldown"` // primary-TF bars to wait after an exit
+	RequireReset    *bool   `yaml:"require_reset"`    // must close back inside the channel first
 }
 
 func (s SqueezeConfig) TrendFilterEnabled() bool {
@@ -180,7 +200,17 @@ func (s SqueezeConfig) WithDefaults() SqueezeConfig {
 	if s.FundingAbsMax <= 0 {
 		s.FundingAbsMax = 0.0005
 	}
+	if s.ReentryATR <= 0 {
+		s.ReentryATR = 0.25
+	}
+	if s.ReentryCooldown <= 0 {
+		s.ReentryCooldown = 2
+	}
 	return s
+}
+
+func (s SqueezeConfig) ResetRequired() bool {
+	return s.RequireReset == nil || *s.RequireReset
 }
 
 type RiskConfig struct {

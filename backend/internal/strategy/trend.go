@@ -26,6 +26,7 @@ type TrendFollow struct {
 	trailStop     float64
 	entryPrice    float64
 	swingLookback int
+	lock          ReentryLock
 }
 
 func NewTrendFollow(sym string, cfg config.StrategyConfig) *TrendFollow {
@@ -43,6 +44,8 @@ func NewTrendFollow(sym string, cfg config.StrategyConfig) *TrendFollow {
 func (s *TrendFollow) Name() string { return "trend" }
 
 func (s *TrendFollow) Sync(pos PositionState) {
+	was := PositionState{Long: s.inLong, Short: s.inShort, Entry: s.entryPrice}
+	s.lock.ArmOnFlatten(was, pos)
 	s.SyncPosition(pos.Long, pos.Short, pos.Entry, pos.Trail)
 }
 
@@ -52,6 +55,10 @@ func (s *TrendFollow) SyncPosition(long, short bool, entry, trail float64) {
 	s.entryPrice = entry
 	s.trailStop = trail
 }
+
+func (s *TrendFollow) ReentryLock() ReentryLock { return s.lock }
+
+func (s *TrendFollow) RestoreReentryLock(l ReentryLock) { s.lock = l }
 
 func (s *TrendFollow) entryMinBars() int {
 	need := s.tr.EMASlow + 2
@@ -150,11 +157,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		if price <= s.trailStop {
 			sig.Action = types.ActionCloseLong
 			sig.Reason = "trail stop hit"
+			s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
 		if tFast[j] < tSlow[j] {
 			sig.Action = types.ActionCloseLong
 			sig.Reason = "ema cross down"
+			s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
 		sig.Reason = "hold long"
@@ -169,11 +178,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		if price >= s.trailStop {
 			sig.Action = types.ActionCloseShort
 			sig.Reason = "trail stop hit"
+			s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
 		if tFast[j] > tSlow[j] {
 			sig.Action = types.ActionCloseShort
 			sig.Reason = "ema cross up"
+			s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
 		sig.Reason = "hold short"
@@ -183,6 +194,17 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 	if anyNaN(eFast[i], eSlow[i]) {
 		sig.Reason = "entry ema warmup"
 		return sig
+	}
+
+	if s.lock.Armed {
+		s.lock.Stamp(sig.Time)
+		// A bar that does not even wick EMA20 means the old pullback is over.
+		if s.lock.Long && el[i] > eFast[i] {
+			s.lock.MarkReset()
+		}
+		if !s.lock.Long && eh[i] < eFast[i] {
+			s.lock.MarkReset()
+		}
 	}
 
 	// Flat: chop / range gates on the higher TF before new entries.
@@ -208,9 +230,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		crossedUp = eFast[prev] <= eSlow[prev] && eFast[i] > eSlow[i]
 		crossedDown = eFast[prev] >= eSlow[prev] && eFast[i] < eSlow[i]
 	}
-	// Lower-TF pullback still has to be aligned with that TF's EMA20/60.
-	pullbackLong := bullTrend && eFast[i] > eSlow[i] && el[i] <= eFast[i] && price > eFast[i]
-	pullbackShort := bearTrend && eFast[i] < eSlow[i] && eh[i] >= eFast[i] && price < eFast[i]
+	// Pullback is a fresh touch, not a state: the previous bar must have stayed
+	// on the trend side of EMA20, otherwise every bar glued to the average
+	// after a stop-hunt re-fires.
+	prevAwayLong := prev >= 0 && !math.IsNaN(eFast[prev]) && el[prev] > eFast[prev]
+	prevAwayShort := prev >= 0 && !math.IsNaN(eFast[prev]) && eh[prev] < eFast[prev]
+	pullbackLong := bullTrend && eFast[i] > eSlow[i] && el[i] <= eFast[i] && price > eFast[i] && prevAwayLong
+	pullbackShort := bearTrend && eFast[i] < eSlow[i] && eh[i] >= eFast[i] && price < eFast[i] && prevAwayShort
 
 	// Fresh crosses are noisy in mild trends: demand a stronger ADX reading.
 	// On MTF the higher TF already passed the chop gates, so skip the extra hurdle.
@@ -241,9 +267,14 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		if !math.IsNaN(swingLow) && swingLow < stop {
 			stop = swingLow
 		}
+		if reason := s.reentryBlock(true, price, eFast[i], eATR[i], entry); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
 		sig.Action = types.ActionOpenLong
 		sig.StopLoss = stop
 		s.trailStop = stop
+		s.lock.NoteEntry(true, price, eFast[i])
 		sig.Reason = s.entryReason(mtf, true, crossedUp)
 		return sig
 	}
@@ -262,15 +293,25 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		if !math.IsNaN(swingHigh) && swingHigh > stop {
 			stop = swingHigh
 		}
+		if reason := s.reentryBlock(false, price, eFast[i], eATR[i], entry); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
 		sig.Action = types.ActionOpenShort
 		sig.StopLoss = stop
 		s.trailStop = stop
+		s.lock.NoteEntry(false, price, eFast[i])
 		sig.Reason = s.entryReason(mtf, false, crossedDown)
 		return sig
 	}
 
 	sig.Reason = "no setup"
 	return sig
+}
+
+func (s *TrendFollow) reentryBlock(long bool, price, edge, atr float64, bars []types.Kline) string {
+	held := barsOnOrAfter(bars, s.lock.BarTime)
+	return s.lock.Block(long, price, edge, atr, s.tr.ReentryATR, s.tr.ReentryCooldown, held, s.tr.ResetRequired())
 }
 
 func (s *TrendFollow) entryReason(mtf, long, crossed bool) string {

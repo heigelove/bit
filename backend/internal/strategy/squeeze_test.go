@@ -277,6 +277,82 @@ func TestSqueezeShortBreakout(t *testing.T) {
 	}
 }
 
+func TestSqueezeRejectsImmediateReentryAfterStop(t *testing.T) {
+	s := NewSqueezeBreakout("ETHUSDT", squeezeCfg())
+	bars := squeezedBreakout()
+	open := s.Evaluate(bars, MarketContext{})
+	if open.Action != types.ActionOpenLong {
+		t.Fatalf("setup: expected open long, got %s (%s)", open.Action, open.Reason)
+	}
+	s.Sync(PositionState{Long: true, Entry: open.Price, Quantity: 1, InitQty: 1, InitStop: open.StopLoss})
+	s.Sync(PositionState{})
+
+	sig := s.Evaluate(bars, MarketContext{})
+	if sig.Action.IsOpen() {
+		t.Fatalf("must not re-enter the same breakout after a stop, got %s (%s)", sig.Action, sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "reset") &&
+		!strings.Contains(sig.Reason, "same level") &&
+		!strings.Contains(sig.Reason, "cooldown") &&
+		!strings.Contains(sig.Reason, "no fresh cross") {
+		t.Fatalf("expected a reentry block, got %q", sig.Reason)
+	}
+}
+
+func TestSqueezeRejectsSameLevelAfterChannelReset(t *testing.T) {
+	s := NewSqueezeBreakout("ETHUSDT", squeezeCfg())
+	s.sq.ReentryCooldown = 0
+	bars := squeezedBreakout()
+	open := s.Evaluate(bars, MarketContext{})
+	if open.Action != types.ActionOpenLong {
+		t.Fatalf("setup: expected open long, got %s (%s)", open.Action, open.Reason)
+	}
+	s.Sync(PositionState{Long: true, Entry: open.Price, Quantity: 1, InitQty: 1, InitStop: open.StopLoss})
+	s.Sync(PositionState{})
+
+	last := bars[len(bars)-1]
+	bars = append(bars, types.Kline{
+		OpenTime:  last.CloseTime,
+		CloseTime: last.CloseTime.Add(time.Hour),
+		Open:      100, High: 100.05, Low: 99.95, Close: 100,
+		Volume: 1000, Closed: true,
+	})
+	inside := s.Evaluate(bars, MarketContext{})
+	if inside.Action.IsOpen() {
+		t.Fatalf("inside bar must not enter, got %s (%s)", inside.Action, inside.Reason)
+	}
+
+	bars = appendBreakout(bars, 20, 0.3, true)
+	sig := s.Evaluate(bars, MarketContext{})
+	if sig.Action.IsOpen() {
+		t.Fatalf("same Donchian edge must stay locked, got %s (%s)", sig.Action, sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "same level") && !strings.Contains(sig.Reason, "reset") && !strings.Contains(sig.Reason, "no fresh cross") && !strings.Contains(sig.Reason, "no squeeze") {
+		t.Fatalf("expected same-level or squeeze rejection, got %q", sig.Reason)
+	}
+}
+
+func TestSqueezeAllowsReentryAtNewLevel(t *testing.T) {
+	s := NewSqueezeBreakout("ETHUSDT", squeezeCfg())
+	s.sq.ReentryCooldown = 0
+	bars := squeezedBreakout()
+	open := s.Evaluate(bars, MarketContext{})
+	if open.Action != types.ActionOpenLong {
+		t.Fatalf("setup: expected open long, got %s (%s)", open.Action, open.Reason)
+	}
+	s.Sync(PositionState{Long: true, Entry: open.Price, Quantity: 1, InitQty: 1, InitStop: open.StopLoss})
+	s.Sync(PositionState{})
+	s.lock.Reset = true
+	s.lock.Entry = open.Price - 50
+	s.lock.Edge = open.DonchianUp - 50
+	s.lock.BarTime = bars[len(bars)-1].CloseTime
+
+	sig := s.Evaluate(bars, MarketContext{})
+	if sig.Action != types.ActionOpenLong {
+		t.Fatalf("a new level should trade, got %s (%s)", sig.Action, sig.Reason)
+	}
+}
+
 func TestStrategyFactory(t *testing.T) {
 	for _, name := range []string{"", "trend", "squeeze"} {
 		s, err := New(name, "ETHUSDT", config.StrategyConfig{

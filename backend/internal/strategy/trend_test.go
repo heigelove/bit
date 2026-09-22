@@ -133,6 +133,25 @@ func TestMTFClosesOnHigherTFFlip(t *testing.T) {
 	}
 }
 
+func TestTrendRejectsImmediateReentryAfterStop(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	kl := synthBars(80, 100, 0.5, time.Hour, time.Unix(0, 0).UTC(), 1.5)
+	open := s.Evaluate(kl, MarketContext{})
+	if open.Action != types.ActionOpenLong {
+		// Fresh-touch pullback is stricter; the lock still has to hold if we
+		// flatten a long that this series would otherwise want to reopen.
+		s.lock.NoteEntry(true, kl[len(kl)-1].Close, kl[len(kl)-1].Close)
+	} else {
+		s.lock.NoteEntry(true, open.Price, open.EMA20)
+	}
+	s.Sync(PositionState{Long: true, Entry: s.lock.Entry, Quantity: 1})
+	s.Sync(PositionState{})
+	sig := s.Evaluate(kl, MarketContext{})
+	if sig.Action.IsOpen() {
+		t.Fatalf("must not re-enter immediately after a stop, got %s (%s)", sig.Action, sig.Reason)
+	}
+}
+
 func TestLastIndexAtOrBefore(t *testing.T) {
 	origin := time.Unix(0, 0).UTC()
 	bars := synthBars(4, 100, 1, time.Hour, origin, 0)

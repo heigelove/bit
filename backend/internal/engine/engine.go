@@ -134,6 +134,7 @@ func (e *Engine) restoreState(ctx context.Context) error {
 			"halted", riskSnap.Halted,
 		)
 	}
+	e.restoreReentry(ctx)
 
 	pos, err := e.redis.GetPosition(ctx, e.cfg.Mode, e.cfg.Symbol.Name)
 	if err != nil {
@@ -183,7 +184,37 @@ func (e *Engine) restoreState(ctx context.Context) error {
 	return nil
 }
 
+func (e *Engine) restoreReentry(ctx context.Context) {
+	p, ok := e.strategy.(strategy.ReentryPersistent)
+	if !ok || e.redis == nil {
+		return
+	}
+	snap, err := e.redis.GetReentry(ctx, e.cfg.Mode, e.cfg.Symbol.Name)
+	if err != nil {
+		e.log.Warn("restore reentry lock", "err", err)
+		return
+	}
+	if snap == nil {
+		return
+	}
+	lock := strategy.ReentryLock{
+		Armed: snap.Armed,
+		Long:  snap.Long,
+		Entry: snap.Entry,
+		Edge:  snap.Edge,
+		Reset: snap.Reset,
+	}
+	if snap.BarTime != "" {
+		if t, err := time.Parse(time.RFC3339Nano, snap.BarTime); err == nil {
+			lock.BarTime = t.UTC()
+		}
+	}
+	p.RestoreReentryLock(lock)
+	e.log.Info("restored reentry lock", "armed", lock.Armed, "entry", lock.Entry, "reset", lock.Reset)
+}
+
 func (e *Engine) cycle(ctx context.Context) error {
+	defer e.persistReentry(ctx)
 	klines, err := e.client.Klines(ctx, e.cfg.Symbol.Name, e.cfg.Timeframes.Primary, e.cfg.Engine.KlineLimit)
 	if err != nil {
 		return err
@@ -530,6 +561,7 @@ func (e *Engine) executeReduce(ctx context.Context, mark float64, sig types.Sign
 }
 
 func (e *Engine) executeClose(ctx context.Context, mark float64, sig types.Signal) error {
+	e.armReentryFromLastPos()
 	e.log.Info("close", "action", sig.Action, "reason", sig.Reason)
 	if e.cfg.IsPaper() {
 		fill, err := e.paper.Close(mark, sig.Reason, time.Now().UTC())
@@ -712,4 +744,35 @@ func (e *Engine) persistRisk(ctx context.Context) {
 	if err := e.redis.SaveRisk(ctx, e.cfg.Mode, dayR, consecutive, halted, reason); err != nil {
 		e.log.Warn("redis risk", "err", err)
 	}
+}
+
+func (e *Engine) persistReentry(ctx context.Context) {
+	p, ok := e.strategy.(strategy.ReentryPersistent)
+	if !ok || e.redis == nil {
+		return
+	}
+	lock := p.ReentryLock()
+	snap := redisx.ReentrySnapshot{
+		Armed: lock.Armed,
+		Long:  lock.Long,
+		Entry: lock.Entry,
+		Edge:  lock.Edge,
+		Reset: lock.Reset,
+	}
+	if !lock.BarTime.IsZero() {
+		snap.BarTime = lock.BarTime.UTC().Format(time.RFC3339Nano)
+	}
+	if err := e.redis.SaveReentry(ctx, e.cfg.Mode, e.cfg.Symbol.Name, snap); err != nil {
+		e.log.Warn("redis reentry", "err", err)
+	}
+}
+
+func (e *Engine) armReentryFromLastPos() {
+	p, ok := e.strategy.(strategy.ReentryPersistent)
+	if !ok {
+		return
+	}
+	lock := p.ReentryLock()
+	lock.ArmOnFlatten(e.lastPos, strategy.PositionState{})
+	p.RestoreReentryLock(lock)
 }
