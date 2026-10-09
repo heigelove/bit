@@ -11,8 +11,8 @@ func TestLoadShippedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Strategy.Name != "squeeze" {
-		t.Fatalf("strategy.name = %q, want squeeze", cfg.Strategy.Name)
+	if cfg.Strategy.Name != "trend" {
+		t.Fatalf("strategy.name = %q, want trend", cfg.Strategy.Name)
 	}
 	if cfg.Timeframes.Primary != "1h" {
 		t.Fatalf("timeframes.primary = %q, want 1h", cfg.Timeframes.Primary)
@@ -70,6 +70,12 @@ func TestLoadShippedConfig(t *testing.T) {
 	if cfg.Strategy.Trend.ReentryCooldown != 4 {
 		t.Fatalf("trend.reentry_cooldown = %d, want 4", cfg.Strategy.Trend.ReentryCooldown)
 	}
+	if !cfg.Strategy.Trend.EMA20SideRequired() {
+		t.Fatal("require_ema20_side should be enabled")
+	}
+	if !cfg.Strategy.Trend.ReentryHTFResetRequired() {
+		t.Fatal("reentry_htf_reset should be enabled")
+	}
 	if cfg.Risk.MaxNotionalPct != 0.7 {
 		t.Fatalf("max_notional_pct = %v, want 0.7", cfg.Risk.MaxNotionalPct)
 	}
@@ -84,6 +90,15 @@ func TestFiltersDefaultOn(t *testing.T) {
 	sq.UseFundingFilter = &off
 	if sq.FundingFilterEnabled() {
 		t.Fatal("explicit false must disable the funding filter")
+	}
+
+	tr := TrendConfig{}
+	if !tr.EMA20SideRequired() || !tr.ReentryHTFResetRequired() || !tr.ResetRequired() {
+		t.Fatal("omitted trend invalidation keys must default to enabled")
+	}
+	tr.RequireEMA20Side = &off
+	if tr.EMA20SideRequired() {
+		t.Fatal("explicit false must disable the EMA20 side filter")
 	}
 }
 

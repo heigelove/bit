@@ -26,7 +26,7 @@ timeframes:
   entry: "15m"    # 小周期：趋势策略进场与跟踪止损（squeeze 仍只用 primary）
 
 strategy:
-  name: "squeeze"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
+  name: "trend"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
   atr_period: 14       # ATR 周期（两套策略共用）
   min_bars: 220        # 至少需要的历史 K 线（两套策略共用）
 
@@ -52,6 +52,9 @@ strategy:
     reentry_atr: 0.25      # |现价−上次开仓价| 小于此×ATR 则拒绝
     reentry_cooldown: 4    # 离场后至少再等 N 根入场周期 K 线（15m）
     require_reset: true    # 必须先出现一根完全离开 EMA20 的 K 线
+    reentry_htf_reset: true # 15m 离开均线还不够，1h 也要重新站上/跌破 EMA20
+    # 方向失效：EMA20/60 还没交叉，但 1h 收盘或现价已跌破 EMA20 时禁止新多（空头相反）
+    require_ema20_side: true
 
   # 仅 name: squeeze 时生效
   squeeze:

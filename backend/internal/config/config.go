@@ -79,6 +79,12 @@ type TrendConfig struct {
 	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
 	ReentryCooldown int     `yaml:"reentry_cooldown"` // entry-TF bars to wait after an exit
 	RequireReset    *bool   `yaml:"require_reset"`    // need a bar that fully leaves EMA20 first
+	ReentryHTFReset *bool   `yaml:"reentry_htf_reset"` // MTF: 1h must also close back beyond EMA20
+
+	// Regime invalidation: omitted = on. Blocks new entries (and 1h holds) once
+	// price or the last HTF close has lost the fast EMA, even if EMA20/60 have
+	// not crossed yet. This is what stops longing 15m pullbacks in an early drop.
+	RequireEMA20Side *bool `yaml:"require_ema20_side"`
 }
 
 // WithDefaults fills unset positive fields. Chop gates stay 0/false = off.
@@ -115,6 +121,14 @@ func (t TrendConfig) WithDefaults() TrendConfig {
 
 func (t TrendConfig) ResetRequired() bool {
 	return t.RequireReset == nil || *t.RequireReset
+}
+
+func (t TrendConfig) ReentryHTFResetRequired() bool {
+	return t.ReentryHTFReset == nil || *t.ReentryHTFReset
+}
+
+func (t TrendConfig) EMA20SideRequired() bool {
+	return t.RequireEMA20Side == nil || *t.RequireEMA20Side
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.

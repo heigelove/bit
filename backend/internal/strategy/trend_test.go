@@ -128,8 +128,76 @@ func TestMTFClosesOnHigherTFFlip(t *testing.T) {
 	if sig.Action != types.ActionCloseLong {
 		t.Fatalf("expected close long on 1h flip, got %s (%s)", sig.Action, sig.Reason)
 	}
-	if sig.Reason != "ema cross down" && sig.Reason != "trail stop hit" {
-		t.Fatalf("expected 1h flip or trail, got %q", sig.Reason)
+	if sig.Reason != "ema cross down" && sig.Reason != "trail stop hit" && !strings.Contains(sig.Reason, "EMA20") {
+		t.Fatalf("expected 1h flip, trail, or lost EMA20, got %q", sig.Reason)
+	}
+}
+
+func TestTrendBlocksLongAfterHTFLosesEMA20(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	htf, ltf := alignedBars(80, 80, 100, 0.5, 100, 0.5, time.Hour, 15*time.Minute, 1.5)
+	dumpLast(htf, 1, 4)
+
+	sig := s.Evaluate(htf, MarketContext{Entry: ltf})
+	if sig.Action.IsOpen() {
+		t.Fatalf("must not long after 1h lost EMA20: %s", sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "close lost") || !strings.Contains(sig.Reason, "EMA20") {
+		t.Fatalf("expected close lost 1h EMA20, got %s %q", sig.Action, sig.Reason)
+	}
+}
+
+func TestTrendBlocksLongWhenPriceBelowHTFEMA20(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	// 1h still rising (EMA20 > EMA60, close above EMA20) but 15m has already
+	// dumped below the 1h fast average — the current hour is the drop.
+	htf, ltf := alignedBars(80, 80, 100, 0.5, 80, 0.4, time.Hour, 15*time.Minute, 1.5)
+
+	sig := s.Evaluate(htf, MarketContext{Entry: ltf})
+	if sig.Action.IsOpen() {
+		t.Fatalf("must not long 15m while price is below 1h EMA20: %s", sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "price below") || !strings.Contains(sig.Reason, "EMA20") {
+		t.Fatalf("expected price below 1h EMA20, got %s %q", sig.Action, sig.Reason)
+	}
+}
+
+func TestTrendReentryNeedsHTFReclaim(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	htf, ltf := alignedBars(80, 80, 100, 0.5, 100, 0.5, time.Hour, 15*time.Minute, 0)
+	dumpLast(htf, 1, 4)
+
+	// 15m bounce that fully leaves its own EMA20, which used to reset the lock.
+	last := &ltf[len(ltf)-1]
+	last.Low = last.Close - 0.01
+	last.High = last.Close + 0.01
+	last.Open = last.Close - 0.005
+
+	s.lock.NoteEntry(true, last.Close, last.Close)
+	s.Sync(PositionState{Long: true, Entry: last.Close, Quantity: 1})
+	s.Sync(PositionState{})
+
+	sig := s.Evaluate(htf, MarketContext{Entry: ltf})
+	if s.lock.Reset {
+		t.Fatal("15m bounce must not reset reentry while 1h is still below EMA20")
+	}
+	if sig.Action.IsOpen() {
+		t.Fatalf("must not re-enter, got %s (%s)", sig.Action, sig.Reason)
+	}
+}
+
+func TestTrendClosesLongWhenHTFLosesEMA20(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.SyncPosition(true, false, 150, 1)
+	htf, ltf := alignedBars(80, 80, 100, 0.5, 100, 0.5, time.Hour, 15*time.Minute, 0)
+	dumpLast(htf, 1, 4)
+
+	sig := s.Evaluate(htf, MarketContext{Entry: ltf})
+	if sig.Action != types.ActionCloseLong {
+		t.Fatalf("expected close long after 1h lost EMA20, got %s (%s)", sig.Action, sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "EMA20") && sig.Reason != "trail stop hit" {
+		t.Fatalf("expected lost EMA20 or trail, got %q", sig.Reason)
 	}
 }
 
@@ -203,4 +271,17 @@ func alignedBars(hn, ln int, hStart, hDrift, lStart, lDrift float64, hInt, lInt 
 	lOrigin := end.Add(-time.Duration(ln) * lInt)
 	lower = synthBars(ln, lStart, lDrift, lInt, lOrigin, lWick)
 	return
+}
+
+func dumpLast(bars []types.Kline, n int, drop float64) {
+	for i := len(bars) - n; i < len(bars); i++ {
+		if i < 0 {
+			continue
+		}
+		bars[i].Close -= drop
+		if bars[i].Close < bars[i].Low {
+			bars[i].Low = bars[i].Close - 0.5
+		}
+		bars[i].Open = bars[i].Close + 0.3
+	}
 }

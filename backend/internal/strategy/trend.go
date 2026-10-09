@@ -13,8 +13,11 @@ import (
 //
 // When the engine supplies a smaller entry timeframe (typically 15m) alongside
 // the primary trend bars (typically 1h):
-//   - primary: direction, chop gates, EMA200, trend-flip exit
+//   - primary: direction, chop gates, EMA200, trend-flip / EMA20-loss exit
 //   - entry:   pullback / cross timing, chase distance, ATR trail
+// A still-bullish EMA20/60 stack does not authorize longs once the 1h close or
+// the current price has lost 1h EMA20; that is the early-drop window where
+// 15m pullbacks would otherwise keep buying.
 type TrendFollow struct {
 	cfg config.StrategyConfig
 	tr  config.TrendConfig
@@ -166,6 +169,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
+		// Flatten on a closed 1h loss of EMA20, not a 15m dip through it.
+		if reason := s.ema20SideBlock(true, tc[j], tc[j], tFast[j], mtf); reason != "" {
+			sig.Action = types.ActionCloseLong
+			sig.Reason = reason
+			s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
+			return sig
+		}
 		sig.Reason = "hold long"
 		return sig
 	}
@@ -187,6 +197,12 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
+		if reason := s.ema20SideBlock(false, tc[j], tc[j], tFast[j], mtf); reason != "" {
+			sig.Action = types.ActionCloseShort
+			sig.Reason = reason
+			s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
+			return sig
+		}
 		sig.Reason = "hold short"
 		return sig
 	}
@@ -199,10 +215,14 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 	if s.lock.Armed {
 		s.lock.Stamp(sig.Time)
 		// A bar that does not even wick EMA20 means the old pullback is over.
-		if s.lock.Long && el[i] > eFast[i] {
+		// On MTF also wait for the 1h close to reclaim / lose EMA20, otherwise
+		// one 15m bounce resets the lock and the next dip re-enters the drop.
+		htfReclaimed := !mtf || !s.tr.ReentryHTFResetRequired() || tc[j] > tFast[j]
+		htfRejected := !mtf || !s.tr.ReentryHTFResetRequired() || tc[j] < tFast[j]
+		if s.lock.Long && el[i] > eFast[i] && htfReclaimed {
 			s.lock.MarkReset()
 		}
-		if !s.lock.Long && eh[i] < eFast[i] {
+		if !s.lock.Long && eh[i] < eFast[i] && htfRejected {
 			s.lock.MarkReset()
 		}
 	}
@@ -215,6 +235,21 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			sig.Reason = reason
 		}
 		return sig
+	}
+
+	// EMA20/60 lag: a fresh drop still looks like a bull pullback until the
+	// slow pair crosses. Refuse new trades once price has lost the fast EMA.
+	if tFast[j] > tSlow[j] {
+		if reason := s.ema20SideBlock(true, tc[j], price, tFast[j], mtf); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
+	}
+	if tFast[j] < tSlow[j] {
+		if reason := s.ema20SideBlock(false, tc[j], price, tFast[j], mtf); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
 	}
 
 	distEMA := math.Abs(price - eFast[i])
@@ -337,6 +372,34 @@ func (s *TrendFollow) entryReason(mtf, long, crossed bool) string {
 		return "EMA cross down + trend filter"
 	}
 	return "pullback to EMA20 reject"
+}
+
+// ema20SideBlock rejects (or, when in a trade, invalidates) a side once the
+// last higher-TF close or the current price has lost the fast EMA.
+func (s *TrendFollow) ema20SideBlock(long bool, htfClose, price, htfEMA20 float64, mtf bool) string {
+	if !s.tr.EMA20SideRequired() {
+		return ""
+	}
+	label := "EMA20"
+	if mtf {
+		label = "1h EMA20"
+	}
+	if long {
+		if htfClose <= htfEMA20 {
+			return fmt.Sprintf("close lost %s", label)
+		}
+		if price <= htfEMA20 {
+			return fmt.Sprintf("price below %s", label)
+		}
+		return ""
+	}
+	if htfClose >= htfEMA20 {
+		return fmt.Sprintf("close reclaimed %s", label)
+	}
+	if price >= htfEMA20 {
+		return fmt.Sprintf("price above %s", label)
+	}
+	return ""
 }
 
 // chopBlock rejects entries when the market is ranging: weak/falling ADX or tangled EMAs.
