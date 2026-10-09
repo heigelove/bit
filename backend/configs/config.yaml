@@ -42,7 +42,8 @@ strategy:
     chase_max_atr: 1.5     # 价格距 15m EMA20 超过此倍数 ATR 禁止追单
     use_ema200_filter: true
     # 震荡过滤：ADX 下行 / 均线纠缠 / DI 背离 / 慢线走平 时拒绝开仓
-    adx_rising_bars: 2     # 要求 ADX 高于 N 根前（趋势强度仍在抬升）
+    adx_rising_bars: 2     # 弱趋势里要求 ADX 高于 N 根前
+    adx_rising_exempt: 30  # ADX 已 ≥ 30 时不再要求继续抬升（单边行情 ADX 会见顶回落）
     ema_sep_min_atr: 1.0   # |EMA20−EMA60| 至少 1.0×1h ATR，挡住均线刚粘上的弱反抽
     ema_slope_bars: 5      # 慢线斜率回看根数
     ema_slope_min_atr: 0.08 # 慢线 N 根变化至少 0.08×ATR，过滤走平
@@ -52,10 +53,13 @@ strategy:
     widen_min_stop: true
     use_htf_atr: true      # 止损/跟踪用 1h ATR，避免 15m 噪声扫出
     trail_after_r: 1.0     # 浮盈未到 1R 前不收紧止损
-    pullback_htf_max_atr: 0.8  # 15m 入场必须靠近 1h EMA20（真·1h 回调，不是 15m 毛刺）
+    pullback_htf_max_atr: 0.8  # 弱趋势：15m 入场必须靠近 1h EMA20
+    continuation_adx: 28       # ADX ≥ 28 视为单边延续，允许 15m 旗形远离 1h EMA20
+    continuation_htf_max_atr: 0  # 0 = 延续单不限制距 1h EMA20（仍须 15m 回踩 EMA20）
     require_bar_confirm: true  # 入场 K 线必须收在顺势一侧
     close_confirm_frac: 0.55
     allow_ltf_cross: false     # 关掉 15m EMA 金叉/死叉（噪声大）
+    allow_htf_cross: true      # 1h EMA20/60 交叉可开仓（抓趋势起点）
     # 止损后禁止立刻在同一 EMA 再进
     reentry_atr: 0.25      # |现价−上次开仓价| 小于此×ATR 则拒绝
     reentry_cooldown: 4    # 离场后至少再等 N 根入场周期 K 线（15m）

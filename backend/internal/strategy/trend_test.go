@@ -256,14 +256,48 @@ func TestMinStopRejectsWhenWidenOff(t *testing.T) {
 func TestHTFPullbackBlock(t *testing.T) {
 	s := NewTrendFollow("ETHUSDT", testTrendCfg())
 	s.tr.PullbackHTFMaxATR = 0.8
-	if got := s.htfPullbackBlock(200, 100, 10, true); got == "" {
+	if got := s.htfPullbackBlock(200, 100, 10, 0, true, false); got == "" {
 		t.Fatal("price 10 ATR from 1h EMA20 must be rejected")
 	}
-	if got := s.htfPullbackBlock(105, 100, 10, true); got != "" {
+	if got := s.htfPullbackBlock(105, 100, 10, 0, true, false); got != "" {
 		t.Fatalf("0.5 ATR pullback should pass, got %q", got)
 	}
-	if got := s.htfPullbackBlock(200, 100, 10, false); got != "" {
+	if got := s.htfPullbackBlock(200, 100, 10, 0, false, false); got != "" {
 		t.Fatalf("single-TF must skip the 1h proximity gate, got %q", got)
+	}
+}
+
+func TestContinuationSkipsTightHTFPullback(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.PullbackHTFMaxATR = 0.8
+	s.tr.ContinuationADX = 28
+	s.tr.ContinuationHTFMaxATR = 0
+	if got := s.htfPullbackBlock(200, 100, 10, 35, true, false); got != "" {
+		t.Fatalf("strong ADX continuation must allow distance from 1h EMA, got %q", got)
+	}
+	if got := s.htfPullbackBlock(200, 100, 10, 20, true, false); got == "" {
+		t.Fatal("weak ADX must still require 1h EMA proximity")
+	}
+	if got := s.htfPullbackBlock(200, 100, 10, 20, true, true); got != "" {
+		t.Fatalf("1h cross must skip proximity, got %q", got)
+	}
+}
+
+func TestChopAllowsFallingADXWhenStrong(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.ADXMin = 20
+	s.tr.ADXRisingBars = 2
+	s.tr.ADXRisingExempt = 30
+	s.tr.EMASepMinATR = 0
+	adx := []float64{40, 38, 36}
+	ema := []float64{1, 1, 1}
+	atr := []float64{1, 1, 1}
+	if got := s.chopBlock(adx, ema, ema, atr, 2); got != "" {
+		t.Fatalf("ADX 36 falling from 40 must pass exempt, got %q", got)
+	}
+	weak := []float64{26, 25, 24}
+	if got := s.chopBlock(weak, ema, ema, atr, 2); got == "" || !strings.Contains(got, "ADX falling") {
+		t.Fatalf("weak falling ADX must still block, got %q", got)
 	}
 }
 

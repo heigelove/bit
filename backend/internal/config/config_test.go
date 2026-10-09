@@ -41,6 +41,15 @@ func TestLoadShippedConfig(t *testing.T) {
 	if cfg.Strategy.Trend.PullbackHTFMaxATR != 0.8 {
 		t.Fatalf("pullback_htf_max_atr = %v, want 0.8", cfg.Strategy.Trend.PullbackHTFMaxATR)
 	}
+	if cfg.Strategy.Trend.ContinuationADX != 28 {
+		t.Fatalf("continuation_adx = %v, want 28", cfg.Strategy.Trend.ContinuationADX)
+	}
+	if cfg.Strategy.Trend.ADXRisingExempt != 30 {
+		t.Fatalf("adx_rising_exempt = %v, want 30", cfg.Strategy.Trend.ADXRisingExempt)
+	}
+	if !cfg.Strategy.Trend.HTFCrossAllowed() {
+		t.Fatal("allow_htf_cross should be enabled")
+	}
 	if !cfg.Strategy.Trend.HTFATREnabled() || !cfg.Strategy.Trend.WidenMinStopEnabled() || !cfg.Strategy.Trend.BarConfirmRequired() {
 		t.Fatal("htf atr / widen stop / bar confirm should be enabled")
 	}
@@ -122,6 +131,9 @@ func TestFiltersDefaultOn(t *testing.T) {
 	}
 	if tr.LTFCrossAllowed() {
 		t.Fatal("omitted allow_ltf_cross must default to disabled")
+	}
+	if !tr.HTFCrossAllowed() {
+		t.Fatal("omitted allow_htf_cross must default to enabled")
 	}
 	tr.RequireEMA20Side = &off
 	if tr.EMA20SideRequired() {

@@ -13,8 +13,8 @@ import (
 //
 // When the engine supplies a smaller entry timeframe (typically 15m) alongside
 // the primary trend bars (typically 1h):
-//   - primary: direction, chop gates, EMA200, trend-flip / EMA20-loss exit
-//   - entry:   pullback / cross timing, chase distance, ATR trail
+//   - primary: direction, chop gates, EMA200, 1h EMA cross, trail, trend-flip exit
+//   - entry:   15m pullback timing; in a strong ADX trend this may be far from 1h EMA20
 // A still-bullish EMA20/60 stack does not authorize longs once the 1h close or
 // the current price has lost 1h EMA20; that is the early-drop window where
 // 15m pullbacks would otherwise keep buying.
@@ -252,12 +252,6 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		}
 	}
 
-	distEMA := math.Abs(price - eFast[i])
-	if distEMA > s.tr.ChaseMaxATR*eATR[i] {
-		sig.Reason = "too far from EMA20, no chase"
-		return sig
-	}
-
 	prev := i - 1
 	crossedUp := false
 	crossedDown := false
@@ -278,15 +272,41 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		crossedUp = false
 		crossedDown = false
 	}
+	crossADXFloor := s.tr.ADXMin + s.tr.CrossADXBonus
 	// Fresh crosses are noisy in mild trends: demand a stronger ADX reading.
 	if !mtf {
-		crossADXFloor := s.tr.ADXMin + s.tr.CrossADXBonus
 		if crossedUp && tADX[j] < crossADXFloor {
 			crossedUp = false
 		}
 		if crossedDown && tADX[j] < crossADXFloor {
 			crossedDown = false
 		}
+	}
+
+	// 1h EMA20/60 cross: catch the start of a one-sided move. Only fire on the
+	// 15m bar that completes that 1h candle, otherwise it would re-trigger all hour.
+	htfCrossedUp := false
+	htfCrossedDown := false
+	if s.tr.HTFCrossAllowed() && j > 0 && !anyNaN(tFast[j-1], tSlow[j-1]) {
+		htfJustClosed := !mtf || entry[i].CloseTime.Equal(trend[j].CloseTime)
+		if htfJustClosed {
+			htfCrossedUp = tFast[j-1] <= tSlow[j-1] && tFast[j] > tSlow[j] && tADX[j] >= crossADXFloor
+			htfCrossedDown = tFast[j-1] >= tSlow[j-1] && tFast[j] < tSlow[j] && tADX[j] >= crossADXFloor
+		}
+	}
+
+	// Chase-distance only applies to 15m EMA crosses. Pullbacks sit on the 15m
+	// average by construction; 1h crosses happen after a run and would otherwise
+	// be blocked by 15m chase_max_atr.
+	distEMA := math.Abs(price - eFast[i])
+	chasing := distEMA > s.tr.ChaseMaxATR*eATR[i]
+	if chasing && (crossedUp || crossedDown) && !pullbackLong && !pullbackShort && !htfCrossedUp && !htfCrossedDown {
+		sig.Reason = "too far from EMA20, no chase"
+		return sig
+	}
+	if chasing {
+		crossedUp = false
+		crossedDown = false
 	}
 
 	swingLow := indicators.SwingLow(el, i, s.swingLookback)
@@ -298,7 +318,7 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		swingHigh = indicators.SwingHigh(th, j, s.swingLookback)
 	}
 
-	if bullTrend && (crossedUp || pullbackLong) {
+	if bullTrend && (crossedUp || pullbackLong || htfCrossedUp) {
 		if reason := s.directionBlock(true, plusDI[j], minusDI[j], tSlow, tATR, j); reason != "" {
 			if mtf {
 				sig.Reason = "1h " + reason
@@ -307,13 +327,15 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			}
 			return sig
 		}
-		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], mtf); reason != "" {
+		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], tADX[j], mtf, htfCrossedUp); reason != "" {
 			sig.Reason = reason
 			return sig
 		}
-		if reason := s.barConfirmBlock(entry[i], true); reason != "" {
-			sig.Reason = reason
-			return sig
+		if !htfCrossedUp {
+			if reason := s.barConfirmBlock(entry[i], true); reason != "" {
+				sig.Reason = reason
+				return sig
+			}
 		}
 		stopATR := price - s.tr.ATRStopMult*stopATRSrc
 		stop := stopATR
@@ -333,11 +355,11 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		sig.StopLoss = stop
 		s.trailStop = stop
 		s.lock.NoteEntry(true, price, eFast[i])
-		sig.Reason = s.entryReason(mtf, true, crossedUp)
+		sig.Reason = s.entryReason(mtf, true, crossedUp, htfCrossedUp)
 		return sig
 	}
 
-	if bearTrend && (crossedDown || pullbackShort) {
+	if bearTrend && (crossedDown || pullbackShort || htfCrossedDown) {
 		if reason := s.directionBlock(false, plusDI[j], minusDI[j], tSlow, tATR, j); reason != "" {
 			if mtf {
 				sig.Reason = "1h " + reason
@@ -346,13 +368,15 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			}
 			return sig
 		}
-		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], mtf); reason != "" {
+		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], tADX[j], mtf, htfCrossedDown); reason != "" {
 			sig.Reason = reason
 			return sig
 		}
-		if reason := s.barConfirmBlock(entry[i], false); reason != "" {
-			sig.Reason = reason
-			return sig
+		if !htfCrossedDown {
+			if reason := s.barConfirmBlock(entry[i], false); reason != "" {
+				sig.Reason = reason
+				return sig
+			}
 		}
 		stopATR := price + s.tr.ATRStopMult*stopATRSrc
 		stop := stopATR
@@ -372,7 +396,7 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		sig.StopLoss = stop
 		s.trailStop = stop
 		s.lock.NoteEntry(false, price, eFast[i])
-		sig.Reason = s.entryReason(mtf, false, crossedDown)
+		sig.Reason = s.entryReason(mtf, false, crossedDown, htfCrossedDown)
 		return sig
 	}
 
@@ -404,13 +428,27 @@ func (s *TrendFollow) applyMinStop(price, stop, trendATR float64, long, mtf bool
 	return stop, fmt.Sprintf("stop too tight %.2f < %.2f (%.2f×%s)", dist, minDist, s.tr.MinStopATR, label)
 }
 
-func (s *TrendFollow) htfPullbackBlock(price, htfEMA, htfATR float64, mtf bool) string {
-	if !mtf || s.tr.PullbackHTFMaxATR <= 0 || htfATR <= 0 || math.IsNaN(htfATR) || math.IsNaN(htfEMA) {
+func (s *TrendFollow) htfPullbackBlock(price, htfEMA, htfATR, adx float64, mtf, skip bool) string {
+	if skip || !mtf || htfATR <= 0 || math.IsNaN(htfATR) || math.IsNaN(htfEMA) {
+		return ""
+	}
+	maxMult := s.tr.PullbackHTFMaxATR
+	continuation := s.tr.ContinuationADX > 0 && adx >= s.tr.ContinuationADX
+	if continuation {
+		maxMult = s.tr.ContinuationHTFMaxATR
+		if maxMult <= 0 {
+			return ""
+		}
+	}
+	if maxMult <= 0 {
 		return ""
 	}
 	dist := math.Abs(price - htfEMA)
-	max := s.tr.PullbackHTFMaxATR * htfATR
+	max := maxMult * htfATR
 	if dist > max {
+		if continuation {
+			return fmt.Sprintf("trend extended dist=%.2f > %.2f", dist, max)
+		}
 		return fmt.Sprintf("not a 1h pullback dist=%.2f > %.2f", dist, max)
 	}
 	return ""
@@ -489,26 +527,32 @@ func (s *TrendFollow) reentryBlock(long bool, price, edge, atr float64, bars []t
 	return s.lock.Block(long, price, edge, atr, s.tr.ReentryATR, s.tr.ReentryCooldown, held, s.tr.ResetRequired())
 }
 
-func (s *TrendFollow) entryReason(mtf, long, crossed bool) string {
+func (s *TrendFollow) entryReason(mtf, long, ltfCross, htfCross bool) string {
+	if htfCross {
+		if long {
+			return "1h EMA cross up"
+		}
+		return "1h EMA cross down"
+	}
 	if mtf {
 		if long {
-			if crossed {
+			if ltfCross {
 				return "15m EMA cross up + 1h trend"
 			}
 			return "15m pullback to EMA20 reclaim"
 		}
-		if crossed {
+		if ltfCross {
 			return "15m EMA cross down + 1h trend"
 		}
 		return "15m pullback to EMA20 reject"
 	}
 	if long {
-		if crossed {
+		if ltfCross {
 			return "EMA cross up + trend filter"
 		}
 		return "pullback to EMA20 reclaim"
 	}
-	if crossed {
+	if ltfCross {
 		return "EMA cross down + trend filter"
 	}
 	return "pullback to EMA20 reject"
@@ -548,12 +592,14 @@ func (s *TrendFollow) chopBlock(adx, emaFast, emaSlow, atr []float64, i int) str
 		return fmt.Sprintf("ADX %.1f < %.1f chop", adx[i], s.tr.ADXMin)
 	}
 	if n := s.tr.ADXRisingBars; n > 0 {
-		j := i - n
-		if j < 0 || math.IsNaN(adx[j]) {
-			return "ADX rising warmup"
-		}
-		if adx[i] <= adx[j] {
-			return fmt.Sprintf("ADX falling %.1f≤%.1f chop", adx[i], adx[j])
+		if s.tr.ADXRisingExempt <= 0 || adx[i] < s.tr.ADXRisingExempt {
+			j := i - n
+			if j < 0 || math.IsNaN(adx[j]) {
+				return "ADX rising warmup"
+			}
+			if adx[i] <= adx[j] {
+				return fmt.Sprintf("ADX falling %.1f≤%.1f chop", adx[i], adx[j])
+			}
 		}
 	}
 	if s.tr.EMASepMinATR > 0 {

@@ -68,12 +68,13 @@ type TrendConfig struct {
 	UseEMA200Filter bool    `yaml:"use_ema200_filter"`
 
 	// Chop filters (0 / false = disabled).
-	ADXRisingBars  int     `yaml:"adx_rising_bars"`   // require ADX > ADX[N bars ago]
-	EMASepMinATR   float64 `yaml:"ema_sep_min_atr"`   // |EMA fast−slow| must exceed this × ATR
-	EMASlopeBars   int     `yaml:"ema_slope_bars"`    // slow-EMA slope lookback
-	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
-	UseDIFilter    bool    `yaml:"use_di_filter"`     // long needs +DI > −DI (and vice versa)
-	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`   // fresh EMA cross needs ADX ≥ ADXMin + bonus
+	ADXRisingBars   int     `yaml:"adx_rising_bars"`    // require ADX > ADX[N bars ago]
+	ADXRisingExempt float64 `yaml:"adx_rising_exempt"`  // skip rising check when ADX already ≥ this
+	EMASepMinATR    float64 `yaml:"ema_sep_min_atr"`    // |EMA fast−slow| must exceed this × ATR
+	EMASlopeBars    int     `yaml:"ema_slope_bars"`     // slow-EMA slope lookback
+	EMASlopeMinATR  float64 `yaml:"ema_slope_min_atr"`  // |Δ slow EMA| over lookback ≥ this × ATR
+	UseDIFilter     bool    `yaml:"use_di_filter"`      // long needs +DI > −DI (and vice versa)
+	CrossADXBonus   float64 `yaml:"cross_adx_bonus"`    // fresh EMA cross needs ADX ≥ ADXMin + bonus
 	// MinStopATR is the floor vs higher-TF ATR. WidenMinStop (default on) stretches
 	// a tight 15m stop out to this distance; explicit false rejects the entry.
 	MinStopATR   float64 `yaml:"min_stop_atr"`
@@ -82,13 +83,19 @@ type TrendConfig struct {
 	UseHTFATR *bool `yaml:"use_htf_atr"`
 	// TrailAfterR: do not ratchet the stop until price has moved this many R in favor.
 	TrailAfterR float64 `yaml:"trail_after_r"`
-	// PullbackHTFMaxATR: 15m entries must sit within this × 1h ATR of 1h EMA20.
+	// PullbackHTFMaxATR: mean-reversion 15m entries must sit within this × 1h ATR of 1h EMA20.
 	PullbackHTFMaxATR float64 `yaml:"pullback_htf_max_atr"`
+	// Continuation: when ADX ≥ ContinuationADX, 15m flags may be farther from 1h EMA20.
+	// ContinuationHTFMaxATR is that cap (0 = no extra cap). Weak ADX still uses PullbackHTFMaxATR.
+	ContinuationADX       float64 `yaml:"continuation_adx"`
+	ContinuationHTFMaxATR float64 `yaml:"continuation_htf_max_atr"`
 	// BarConfirm (default on): entry bar must close in the trade's favor.
 	RequireBarConfirm *bool   `yaml:"require_bar_confirm"`
 	CloseConfirmFrac  float64 `yaml:"close_confirm_frac"`
 	// AllowLTFCross (default off): 15m EMA20/60 crosses are noisy; pullbacks only.
 	AllowLTFCross *bool `yaml:"allow_ltf_cross"`
+	// AllowHTFCross (default on): 1h EMA20/60 cross may open on the completing 15m bar.
+	AllowHTFCross *bool `yaml:"allow_htf_cross"`
 
 	// Re-entry gates after a stop: skip the same EMA touch until it resets.
 	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
@@ -160,6 +167,10 @@ func (t TrendConfig) BarConfirmRequired() bool {
 
 func (t TrendConfig) LTFCrossAllowed() bool {
 	return t.AllowLTFCross != nil && *t.AllowLTFCross
+}
+
+func (t TrendConfig) HTFCrossAllowed() bool {
+	return t.AllowHTFCross == nil || *t.AllowHTFCross
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.

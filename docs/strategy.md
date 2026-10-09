@@ -44,9 +44,9 @@
 | 周期 | 配置 | 职责 |
 |------|------|------|
 | 主周期 | `timeframes.primary: 1h` | 方向、震荡门、EMA200、DI/斜率、初始止损与跟踪（1h ATR / 1h 摆动点）、趋势翻转 / 收盘丢 EMA20 离场 |
-| 入场周期 | `timeframes.entry: 15m` | 时机：触及 15m EMA20 后收回；必须同时靠近 1h EMA20 |
+| 入场周期 | `timeframes.entry: 15m` | 时机：15m 回踩 EMA20 收回；强趋势时不要求靠近 1h EMA20 |
 
-未配置入场周期（或与主周期相同）时，上述全部落在主周期上。单周期下仍允许新鲜 EMA 交叉，且要求 ADX ≥ `adx_min + cross_adx_bonus`（当前 30）。多周期默认 **关掉** 15m 金叉/死叉（`allow_ltf_cross: false`），只做回调：15m 交叉噪声大，回测里几乎全是亏单。
+未配置入场周期（或与主周期相同）时，上述全部落在主周期上。单周期下仍允许新鲜 EMA 交叉，且要求 ADX ≥ `adx_min + cross_adx_bonus`（当前 30）。多周期默认 **关掉** 15m 金叉/死叉（`allow_ltf_cross: false`），打开 **1h EMA20/60 交叉**（`allow_htf_cross`）用来抓单边起点。
 
 ### 多空判定（1h）
 
@@ -56,17 +56,17 @@
 
 ### 开仓
 
-必须先通过 1h 震荡过滤，再出现合格的 15m 回调（默认不做 15m 交叉）：
+必须先通过 1h 震荡过滤，再出现下面形态之一。
 
 **震荡过滤（`chopBlock`，做在 1h 上）**
 
 | 条件 | 当前 | 拒绝原因（多周期带 `1h ` 前缀） |
 |------|------|--------------------------------|
 | ADX < `adx_min` | 25 | `ADX … chop` |
-| ADX 不高于 `adx_rising_bars` 根之前 | 2 | `ADX falling … chop` |
+| ADX 不高于 `adx_rising_bars` 根之前，且 ADX < `adx_rising_exempt` | 2 / 30 | `ADX falling … chop` |
 | \|EMA20−EMA60\| < `ema_sep_min_atr` × 1h ATR | 1.0 | `EMA tangled …` |
 
-均线刚粘上的弱反抽（间距不足 1 倍 1h ATR）在这里被挡掉。
+均线刚粘上的弱反抽在这里被挡掉。单边行情里 ADX 往往会在趋势中段见顶回落，所以 ADX ≥ 30 时不再要求它继续抬升，否则整段主升/主跌都进不去。
 
 **方向过滤（`directionBlock`）**
 
@@ -81,21 +81,23 @@ EMA20/60 还没交叉时，1h 看起来仍是多头，但新下跌已经开始�
 - 开新空：对称。
 - 持仓离场：只用 1h **收盘**相对 EMA20，15m 刺破不算，避免被噪声洗出。
 
-**15m 形态（必须处于对应 1h 趋势中）**
+**入场形态（必须处于对应 1h 趋势中）**
 
-1. **回调续势（唯一默认路径）**  
-   多头：15m EMA20 > EMA60；上一根最低价仍在 15m EMA20 上方；本根最低价触及或跌破 15m EMA20；本根收盘重新站上。  
-   空头对称。  
-   「上一根必须离开均线」避免止损后价格贴着均线反复开仓。
-2. **EMA 交叉**：默认关闭。打开 `allow_ltf_cross: true` 后，15m EMA20 上穿/下穿 EMA60 且 1h 方向一致才可进。单周期模式仍走交叉 + `cross_adx_bonus`。
+1. **靠近 1h EMA 的回调（弱/中等趋势）**  
+   15m 回踩 EMA20 后收回，且现价距 **1h EMA20** ≤ `pullback_htf_max_atr`（0.8）× 1h ATR。  
+   用来过滤震荡里「只碰到 15m 均线、根本没回到 1h 均线」的假回调。
+2. **趋势延续旗形（单边）**  
+   ADX ≥ `continuation_adx`（28）时，同一套 15m 回踩 EMA20 **不再要求靠近 1h EMA20**。单边行情价格会贴着 15m 均线推进、远离 1h 均线；若仍强制贴 1h EMA，整段主升/主跌都没有单。`continuation_htf_max_atr: 0` 表示不另加距离上限。
+3. **1h EMA20/60 交叉**  
+   `allow_htf_cross` 默认开。只在完成该根 1h K 线的那根 15m 上触发一次，ADX 须 ≥ `adx_min + cross_adx_bonus`。用来抓趋势起点，不受 1h EMA 距离限制。
+4. **15m EMA 交叉**：默认关（`allow_ltf_cross: false`）。噪声大。
 
-只碰到 15m EMA20 **不够**。那是局部均线，1h 趋势里价格可以远离 1h EMA20 很远，15m 一次回踩就会当成「回调」——回测里大量 1–2 小时扫损来自这里。
+15m 回踩规则（多）：15m EMA20 > EMA60；上一根最低价仍在 EMA20 上方；本根最低价触及 EMA20；本根收盘重新站上。空头对称。
 
-**质量门（针对「假回调」）**
+**其它质量门**
 
-- `pullback_htf_max_atr`（0.8）：现价距 **1h EMA20** 必须 ≤ 0.8 × 1h ATR，否则 `not a 1h pullback`。这才是 1h 趋势里的回调，而不是 15m 毛刺。
-- `require_bar_confirm`（默认开）：入场 K 线必须顺势收盘。多头收阳且收盘位于 K 线区间上 `close_confirm_frac`（0.55）；空头对称。弱收回 → `weak reclaim bar/close`。
-- 现价距 15m EMA20 > `chase_max_atr` × 15m ATR（1.5）→ `too far from EMA20, no chase`。
+- `require_bar_confirm`：回踩入场 K 线必须顺势收盘（1h 交叉不要求，1h 收盘本身就是确认）。
+- `chase_max_atr` 只约束 **15m 交叉** 追价，不挡回踩和 1h 交叉。
 - 再入场锁未解除（见下文）。
 
 ```mermaid
@@ -107,11 +109,11 @@ flowchart TD
   D -->|否| F[HOLD + 更新止损]
   B -->|空仓| G{1h 震荡过滤}
   G -->|拦截| H[NONE]
-  G -->|通过| I{1h 仍多但收盘或现价丢 EMA20?}
+  G -->|通过| I{1h 方向失效?}
   I -->|是| H
-  I -->|否| J{15m 回调收回 且靠近 1h EMA20?}
+  I -->|否| J{1h 金叉 / 15m 回踩 EMA20?}
   J -->|否| H
-  J -->|是| K{顺势收盘 / DI / 慢线斜率 / 再入场}
+  J -->|是| K{弱趋势须靠近 1h EMA; 强趋势可远离}
   K -->|拦截| H
   K -->|通过| L[OPEN，止损按 1h ATR]
 ```
@@ -155,13 +157,15 @@ stop = min(现价 − atr_stop_mult × 1h ATR, 近 10 根 1h 摆动低点)
 |----|----|------|
 | `ema_fast` / `ema_slow` / `ema_filter` | 20 / 60 / 200 | 趋势栈与 EMA200 过滤 |
 | `adx_period` / `adx_min` | 14 / 25 | 强度下限 |
-| `adx_rising_bars` | 2 | ADX 仍在抬升 |
+| `adx_rising_bars` / `adx_rising_exempt` | 2 / 30 | 弱趋势要求 ADX 抬升；ADX≥30 免检 |
 | `ema_sep_min_atr` | 1.0 | 均线间距，挡弱反抽 |
 | `ema_slope_bars` / `ema_slope_min_atr` | 5 / 0.08 | 慢线不能走平 |
 | `use_di_filter` | true | +DI / −DI 与方向一致 |
-| `cross_adx_bonus` | 5 | 仅单周期交叉 |
+| `cross_adx_bonus` | 5 | 交叉需 ADX ≥ adx_min+5 |
 | `allow_ltf_cross` | false | 多周期不做 15m 金叉/死叉 |
-| `pullback_htf_max_atr` | 0.8 | 入场必须靠近 1h EMA20 |
+| `allow_htf_cross` | true | 1h EMA20/60 交叉可开仓 |
+| `pullback_htf_max_atr` | 0.8 | 弱趋势必须靠近 1h EMA20 |
+| `continuation_adx` / `continuation_htf_max_atr` | 28 / 0 | 强趋势允许远离 1h EMA；0=不限距 |
 | `require_bar_confirm` / `close_confirm_frac` | true / 0.55 | 入场 K 线顺势收盘 |
 | `atr_stop_mult` / `atr_trail_mult` | 1.5 / 2.0 | 初始止损与跟踪（按 1h ATR） |
 | `use_htf_atr` | true | 止损/跟踪/摆动点用 1h |
@@ -172,7 +176,7 @@ stop = min(现价 − atr_stop_mult × 1h ATR, 近 10 根 1h 摆动低点)
 | `require_ema20_side` | true | 丢失快线则方向失效 |
 | `reentry_*` / `require_reset` / `reentry_htf_reset` | 见上 | 止损后再入场 |
 
-省略时默认开启：`require_reset`、`reentry_htf_reset`、`require_ema20_side`、`use_htf_atr`、`widen_min_stop`、`require_bar_confirm`。要关掉必须写成 `false`。`allow_ltf_cross` 省略则为关。数值门（ADX 抬升、均线间距、斜率、`min_stop_atr`、`pullback_htf_max_atr`、`trail_after_r`）为 `0` 表示关闭。
+省略时默认开启：`require_reset`、`reentry_htf_reset`、`require_ema20_side`、`use_htf_atr`、`widen_min_stop`、`require_bar_confirm`、`allow_htf_cross`。要关掉必须写成 `false`。`allow_ltf_cross` 省略则为关。数值门（ADX 抬升、均线间距、斜率、`min_stop_atr`、`pullback_htf_max_atr`、`trail_after_r`）为 `0` 表示关闭。`continuation_htf_max_atr: 0` 在延续模式下表示不限制距 1h EMA 的距离。
 
 ---
 
@@ -264,7 +268,9 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `1h ADX … chop` / `1h EMA tangled` / `1h ADX falling` | 1h 震荡 |
 | `close lost 1h EMA20` / `price below 1h EMA20` | 方向失效，禁止新多 |
 | `too far from EMA20, no chase` | 离 15m EMA20 过远 |
-| `not a 1h pullback dist=…` | 离 1h EMA20 太远，不是趋势回调 |
+| `not a 1h pullback dist=…` | 弱趋势里离 1h EMA20 太远 |
+| `trend extended dist=…` | 强趋势但超过 `continuation_htf_max_atr` |
+| `1h EMA cross up/down` | 1h 均线交叉进场 |
 | `weak reclaim/reject bar` / `weak reclaim/reject close` | 入场 K 线未顺势收盘 |
 | `stop too tight` | 止损过近且 `widen_min_stop: false` |
 | `waiting setup reset after exit` / `reentry cooldown` / `same level as last exit` | 再入场锁 |
