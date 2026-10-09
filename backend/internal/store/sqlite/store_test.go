@@ -65,6 +65,24 @@ func TestStoreInserts(t *testing.T) {
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM trades`).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("trades count=%d err=%v", n, err)
 	}
+
+	exists, err := s.TradeExists(ctx, "paper", "oid-2")
+	if err != nil || !exists {
+		t.Fatalf("TradeExists oid-2: exists=%v err=%v", exists, err)
+	}
+	if err := s.InsertTrade(ctx, "paper", "bt-15", types.TradeFill{
+		Time: time.Now().Add(2 * time.Minute), Symbol: "ETHUSDT", Side: types.SideSell,
+		Quantity: 0.1, Price: 2090, PNL: -1, Reason: "exchange stop fill",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	last, err := s.LastBinanceTradeID(ctx, "paper", "ETHUSDT")
+	if err != nil || last != 15 {
+		t.Fatalf("LastBinanceTradeID=%d err=%v", last, err)
+	}
+	if _, ok, err := s.FirstTradeTime(ctx, "paper", "ETHUSDT"); err != nil || !ok {
+		t.Fatalf("FirstTradeTime ok=%v err=%v", ok, err)
+	}
 }
 
 func mathAbs(v float64) float64 {

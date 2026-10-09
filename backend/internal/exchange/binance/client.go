@@ -225,6 +225,86 @@ func (c *Client) Account(ctx context.Context) (*types.AccountState, error) {
 	return st, nil
 }
 
+// UserTrade is a USD-M account fill from /fapi/v1/userTrades.
+type UserTrade struct {
+	ID           int64
+	OrderID      int64
+	Symbol       string
+	Side         types.Side
+	Price        float64
+	Quantity     float64
+	RealizedPNL  float64
+	Commission   float64
+	Time         time.Time
+}
+
+const userTradesLimit = 1000
+
+// UserTrades fetches account fills. fromID > 0 takes precedence (id >= fromID).
+// start/end are ignored when fromID is set. Binance caps a start/end window at 7 days.
+func (c *Client) UserTrades(ctx context.Context, symbol string, start, end time.Time, fromID int64, limit int) ([]UserTrade, error) {
+	if limit <= 0 || limit > userTradesLimit {
+		limit = userTradesLimit
+	}
+	q := url.Values{}
+	q.Set("symbol", strings.ToUpper(symbol))
+	q.Set("limit", strconv.Itoa(limit))
+	if fromID > 0 {
+		q.Set("fromId", strconv.FormatInt(fromID, 10))
+	} else {
+		if !start.IsZero() {
+			q.Set("startTime", strconv.FormatInt(start.UnixMilli(), 10))
+		}
+		if !end.IsZero() {
+			q.Set("endTime", strconv.FormatInt(end.UnixMilli(), 10))
+		}
+	}
+	body, err := c.doSigned(ctx, http.MethodGet, "/fapi/v1/userTrades", q)
+	if err != nil {
+		return nil, err
+	}
+	return parseUserTrades(body)
+}
+
+func parseUserTrades(body []byte) ([]UserTrade, error) {
+	var raw []struct {
+		ID          int64  `json:"id"`
+		OrderID     int64  `json:"orderId"`
+		Symbol      string `json:"symbol"`
+		Side        string `json:"side"`
+		Price       string `json:"price"`
+		Qty         string `json:"qty"`
+		RealizedPnl string `json:"realizedPnl"`
+		Commission  string `json:"commission"`
+		Time        int64  `json:"time"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode user trades: %w", err)
+	}
+	out := make([]UserTrade, 0, len(raw))
+	for _, r := range raw {
+		px, _ := strconv.ParseFloat(r.Price, 64)
+		qty, _ := strconv.ParseFloat(r.Qty, 64)
+		pnl, _ := strconv.ParseFloat(r.RealizedPnl, 64)
+		fee, _ := strconv.ParseFloat(r.Commission, 64)
+		if fee < 0 {
+			fee = -fee
+		}
+		out = append(out, UserTrade{
+			ID:          r.ID,
+			OrderID:     r.OrderID,
+			Symbol:      r.Symbol,
+			Side:        types.Side(r.Side),
+			Price:       px,
+			Quantity:    qty,
+			RealizedPNL: pnl,
+			Commission:  fee,
+			Time:        time.UnixMilli(r.Time).UTC(),
+		})
+	}
+	return out, nil
+}
+
 func (c *Client) PlaceMarketOrder(ctx context.Context, req types.OrderRequest) (*types.OrderResult, error) {
 	q := url.Values{}
 	q.Set("symbol", strings.ToUpper(req.Symbol))

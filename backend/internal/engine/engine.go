@@ -99,6 +99,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		if err := e.client.SetLeverage(ctx, e.cfg.Symbol.Name, e.cfg.Symbol.Leverage); err != nil {
 			return fmt.Errorf("set leverage: %w", err)
 		}
+		e.syncLiveFills(ctx)
 	}
 
 	ticker := time.NewTicker(e.cfg.Engine.PollInterval)
@@ -215,6 +216,9 @@ func (e *Engine) restoreReentry(ctx context.Context) {
 
 func (e *Engine) cycle(ctx context.Context) error {
 	defer e.persistReentry(ctx)
+	if !e.cfg.IsPaper() {
+		defer e.syncLiveFills(ctx)
+	}
 	klines, err := e.client.Klines(ctx, e.cfg.Symbol.Name, e.cfg.Timeframes.Primary, e.cfg.Engine.KlineLimit)
 	if err != nil {
 		return err
@@ -673,7 +677,7 @@ func (e *Engine) bookClosedPosition(ctx context.Context, prev strategy.PositionS
 		side = types.SideBuy
 	}
 	pnl := realizedPNL(prev.Long, prev.Entry, exit, prev.Quantity)
-	e.recordFill(ctx, &types.TradeFill{
+	fill := &types.TradeFill{
 		Time:     time.Now().UTC(),
 		Symbol:   e.cfg.Symbol.Name,
 		Side:     side,
@@ -681,7 +685,14 @@ func (e *Engine) bookClosedPosition(ctx context.Context, prev strategy.PositionS
 		Price:    exit,
 		PNL:      pnl,
 		Reason:   reason,
-	}, orderID)
+	}
+	// Live stop fills are written from Binance userTrades (actual realizedPnl).
+	// Paper has no exchange history, so it still books the local fill.
+	if e.cfg.IsPaper() {
+		e.recordFill(ctx, fill, orderID)
+	} else {
+		e.logFill(fill)
+	}
 	e.risk.RecordClosedTrade(time.Now(), e.equity(ctx, exit), pnl)
 	e.persistRisk(ctx)
 	if saveCloseSignal {
@@ -771,7 +782,7 @@ func (e *Engine) saveSignal(ctx context.Context, sig types.Signal) {
 	}
 }
 
-func (e *Engine) recordFill(ctx context.Context, fill *types.TradeFill, orderID string) {
+func (e *Engine) logFill(fill *types.TradeFill) {
 	if fill == nil {
 		return
 	}
@@ -783,7 +794,11 @@ func (e *Engine) recordFill(ctx context.Context, fill *types.TradeFill, orderID 
 		"pnl", fmtF(fill.PNL, 2),
 		"reason", fill.Reason,
 	)
-	if e.db == nil {
+}
+
+func (e *Engine) recordFill(ctx context.Context, fill *types.TradeFill, orderID string) {
+	e.logFill(fill)
+	if fill == nil || e.db == nil {
 		return
 	}
 	if err := e.db.InsertTrade(ctx, e.cfg.Mode, orderID, *fill); err != nil {

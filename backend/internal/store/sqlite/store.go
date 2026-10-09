@@ -171,6 +171,61 @@ VALUES(?,?,?,?,?,?,?,?,?,?)`,
 	return err
 }
 
+// TradeExists reports whether a row with this order_id is already stored.
+func (s *Store) TradeExists(ctx context.Context, mode, orderID string) (bool, error) {
+	if s == nil || orderID == "" {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM trades WHERE mode = ? AND order_id = ?`, mode, orderID,
+	).Scan(&n)
+	return n > 0, err
+}
+
+// LastBinanceTradeID is the highest imported exchange fill id (order_id "bt-<id>").
+func (s *Store) LastBinanceTradeID(ctx context.Context, mode, symbol string) (int64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	var v sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+SELECT MAX(CAST(SUBSTR(order_id, 4) AS INTEGER)) FROM trades
+ WHERE mode = ? AND symbol = ? AND order_id LIKE 'bt-%'`, mode, symbol).Scan(&v)
+	if err != nil {
+		return 0, err
+	}
+	if !v.Valid {
+		return 0, nil
+	}
+	return v.Int64, nil
+}
+
+// FirstTradeTime is the oldest local fill for this symbol/mode.
+func (s *Store) FirstTradeTime(ctx context.Context, mode, symbol string) (time.Time, bool, error) {
+	if s == nil {
+		return time.Time{}, false, nil
+	}
+	var raw sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT MIN(ts) FROM trades WHERE mode = ? AND symbol = ?`, mode, symbol,
+	).Scan(&raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, false, nil
+	}
+	ts, err := time.Parse(time.RFC3339Nano, raw.String)
+	if err != nil {
+		ts, err = time.Parse(time.RFC3339, raw.String)
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return ts.UTC(), true, nil
+}
+
 func (s *Store) DB() *sql.DB { return s.db }
 
 // nullNaN maps non-finite indicator values to NULL; the driver rejects NaN.
