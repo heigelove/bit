@@ -43,11 +43,12 @@ strategy:
     use_ema200_filter: true
     # 震荡过滤：ADX 下行 / 均线纠缠 / DI 背离 / 慢线走平 时拒绝开仓
     adx_rising_bars: 2     # 要求 ADX 高于 N 根前（趋势强度仍在抬升）
-    ema_sep_min_atr: 0.4   # |EMA20−EMA60| 至少 0.4×ATR，过近视为纠缠
+    ema_sep_min_atr: 1.0   # |EMA20−EMA60| 至少 1.0×1h ATR，挡住均线刚粘上的弱反抽
     ema_slope_bars: 5      # 慢线斜率回看根数
     ema_slope_min_atr: 0.08 # 慢线 N 根变化至少 0.08×ATR，过滤走平
     use_di_filter: true    # 多头需 +DI > −DI，空头相反
     cross_adx_bonus: 5     # 新鲜 EMA 金叉/死叉需 ADX ≥ adx_min+5（回调入场不额外加）
+    min_stop_atr: 1.0      # 止损距至少 1.0×1h ATR，15m 止损过近则拒绝（避免仓位被放大）
     # 止损后禁止立刻在同一 EMA 再进
     reentry_atr: 0.25      # |现价−上次开仓价| 小于此×ATR 则拒绝
     reentry_cooldown: 4    # 离场后至少再等 N 根入场周期 K 线（15m）

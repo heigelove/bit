@@ -244,7 +244,12 @@ func (e *Engine) cycle(ctx context.Context) error {
 	}
 	mark := mkt.Mark
 
+	prev := e.lastPos
+	prevStop := e.liveStop
 	pos := e.syncStrategyPos(ctx)
+	if !e.cfg.IsPaper() {
+		e.reconcileLiveFlat(ctx, prev, prevStop, pos, mark)
+	}
 
 	sig := e.strategy.Evaluate(klines, mkt)
 	e.log.Info("signal", e.signalAttrs(sig)...)
@@ -412,7 +417,13 @@ func (e *Engine) syncLiveStop(ctx context.Context, pos strategy.PositionState, s
 
 func (e *Engine) equity(ctx context.Context, mark float64) float64 {
 	if e.cfg.IsPaper() {
+		if e.paper == nil {
+			return 0
+		}
 		return e.paper.Snapshot(mark).Balance
+	}
+	if e.client == nil {
+		return 0
 	}
 	st, err := e.client.Account(ctx)
 	if err != nil {
@@ -569,6 +580,7 @@ func (e *Engine) executeClose(ctx context.Context, mark float64, sig types.Signa
 			return err
 		}
 		e.trade = tradeContext{}
+		e.lastPos = strategy.PositionState{}
 		e.risk.RecordClosedTrade(time.Now(), e.paper.Snapshot(mark).Balance, fill.PNL)
 		e.recordFill(ctx, fill, "")
 		_ = e.persistAccount(ctx, mark)
@@ -576,9 +588,12 @@ func (e *Engine) executeClose(ctx context.Context, mark float64, sig types.Signa
 		return nil
 	}
 
+	prev := e.lastPos
 	side, qty := e.openQty(ctx)
 	if qty <= 0 {
-		e.log.Warn("close skipped, no position qty")
+		// Exchange already flattened (algo stop) while we were deciding to close.
+		e.bookClosedPosition(ctx, prev, mark, sig.Reason, "", false)
+		_ = e.persistAccount(ctx, mark)
 		return nil
 	}
 	closeSide := types.SideSell
@@ -597,23 +612,105 @@ func (e *Engine) executeClose(ctx context.Context, mark float64, sig types.Signa
 	if err != nil {
 		return err
 	}
-	e.trade = tradeContext{}
 	e.log.Info("live close", "id", res.OrderID, "status", res.Status, "qty", res.Quantity, "px", res.Price)
 	fillPx := res.Price
 	if fillPx == 0 {
 		fillPx = mark
 	}
+	closed := prev
+	if closed.Flat() {
+		closed.Long = side == types.PosLong
+		closed.Short = side == types.PosShort
+		closed.Quantity = qty
+	} else {
+		closed.Quantity = qty
+	}
+	e.bookClosedPosition(ctx, closed, fillPx, sig.Reason, fmt.Sprintf("%d", res.OrderID), false)
+	_ = e.persistAccount(ctx, mark)
+	return nil
+}
+
+// reconcileLiveFlat books an exchange-side flatten (algo stop, liquidation,
+// manual close) that never went through executeClose. Without this, live PnL
+// stays 0 and consecutive-loss halt never fires.
+func (e *Engine) reconcileLiveFlat(ctx context.Context, prev strategy.PositionState, prevStop float64, pos strategy.PositionState, mark float64) {
+	if prev.Flat() || !pos.Flat() {
+		return
+	}
+	reason := "exchange flatten"
+	if prevStop > 0 {
+		reason = fmt.Sprintf("exchange stop %.2f filled", prevStop)
+	}
+	exit := mark
+	if exit <= 0 {
+		exit = prevStop
+	}
+	e.log.Warn("live position gone, booking close",
+		"entry", prev.Entry, "qty", prev.Quantity, "mark", mark, "stop", prevStop)
+	if e.client != nil {
+		if err := e.client.CancelAll(ctx, e.cfg.Symbol.Name); err != nil {
+			e.log.Warn("cancel leftover stops after flatten", "err", err)
+		}
+	}
+	e.bookClosedPosition(ctx, prev, exit, reason, "", true)
+}
+
+// bookClosedPosition records the exit fill, updates risk, and clears local
+// trade state so a later flatten-detect cannot double-count.
+func (e *Engine) bookClosedPosition(ctx context.Context, prev strategy.PositionState, exit float64, reason, orderID string, saveCloseSignal bool) {
+	if prev.Flat() || prev.Quantity <= 0 {
+		e.log.Warn("close skipped, no position qty")
+		e.trade = tradeContext{}
+		e.liveStop = 0
+		e.lastPos = strategy.PositionState{}
+		return
+	}
+	if exit <= 0 {
+		exit = prev.Entry
+	}
+	side := types.SideSell
+	if prev.Short {
+		side = types.SideBuy
+	}
+	pnl := realizedPNL(prev.Long, prev.Entry, exit, prev.Quantity)
 	e.recordFill(ctx, &types.TradeFill{
 		Time:     time.Now().UTC(),
 		Symbol:   e.cfg.Symbol.Name,
-		Side:     closeSide,
-		Quantity: qty,
-		Price:    fillPx,
-		Reason:   sig.Reason,
-	}, fmt.Sprintf("%d", res.OrderID))
-	_ = e.persistAccount(ctx, mark)
+		Side:     side,
+		Quantity: prev.Quantity,
+		Price:    exit,
+		PNL:      pnl,
+		Reason:   reason,
+	}, orderID)
+	e.risk.RecordClosedTrade(time.Now(), e.equity(ctx, exit), pnl)
 	e.persistRisk(ctx)
-	return nil
+	if saveCloseSignal {
+		sig := types.Signal{
+			Time:     time.Now().UTC(),
+			Symbol:   e.cfg.Symbol.Name,
+			Action:   types.ActionCloseLong,
+			Price:    exit,
+			Reason:   reason,
+			StopLoss: prev.Trail,
+		}
+		if prev.Short {
+			sig.Action = types.ActionCloseShort
+		}
+		e.saveSignal(ctx, sig)
+	}
+	e.trade = tradeContext{}
+	e.liveStop = 0
+	e.lastPos = strategy.PositionState{}
+}
+
+func realizedPNL(long bool, entry, exit, qty float64) float64 {
+	if qty <= 0 {
+		return 0
+	}
+	if long {
+		return (exit - entry) * qty
+	}
+	return (entry - exit) * qty
 }
 
 // openQty returns the side and size of the current position, 0 when flat.

@@ -302,6 +302,10 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		if !math.IsNaN(swingLow) && swingLow < stop {
 			stop = swingLow
 		}
+		if reason := s.stopDistBlock(price, stop, tATR[j], mtf); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
 		if reason := s.reentryBlock(true, price, eFast[i], eATR[i], entry); reason != "" {
 			sig.Reason = reason
 			return sig
@@ -328,6 +332,10 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		if !math.IsNaN(swingHigh) && swingHigh > stop {
 			stop = swingHigh
 		}
+		if reason := s.stopDistBlock(price, stop, tATR[j], mtf); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
 		if reason := s.reentryBlock(false, price, eFast[i], eATR[i], entry); reason != "" {
 			sig.Reason = reason
 			return sig
@@ -342,6 +350,25 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 
 	sig.Reason = "no setup"
 	return sig
+}
+
+// stopDistBlock rejects entries whose stop is tighter than MinStopATR × higher-TF ATR.
+// A 15m swing can sit 5 points away while 1h noise is 15; sizing off that stop
+// blows the position up and the next 1h bar stops it out.
+func (s *TrendFollow) stopDistBlock(price, stop, trendATR float64, mtf bool) string {
+	if s.tr.MinStopATR <= 0 || trendATR <= 0 || math.IsNaN(trendATR) {
+		return ""
+	}
+	dist := math.Abs(price - stop)
+	minDist := s.tr.MinStopATR * trendATR
+	if dist+1e-9 >= minDist {
+		return ""
+	}
+	label := "ATR"
+	if mtf {
+		label = "1h ATR"
+	}
+	return fmt.Sprintf("stop too tight %.2f < %.2f (%.2f×%s)", dist, minDist, s.tr.MinStopATR, label)
 }
 
 func (s *TrendFollow) reentryBlock(long bool, price, edge, atr float64, bars []types.Kline) string {

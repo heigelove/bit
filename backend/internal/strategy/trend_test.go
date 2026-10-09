@@ -220,6 +220,23 @@ func TestTrendRejectsImmediateReentryAfterStop(t *testing.T) {
 	}
 }
 
+func TestStopDistBlock(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.MinStopATR = 1.0
+	if got := s.stopDistBlock(2700, 2695, 10, true); got == "" {
+		t.Fatal("expected 5-pt stop to fail vs 10-pt 1h ATR")
+	} else if !strings.Contains(got, "stop too tight") || !strings.Contains(got, "1h ATR") {
+		t.Fatalf("got %q", got)
+	}
+	if got := s.stopDistBlock(2700, 2685, 10, true); got != "" {
+		t.Fatalf("15-pt stop should pass vs 10-pt ATR, got %q", got)
+	}
+	s.tr.MinStopATR = 0
+	if got := s.stopDistBlock(2700, 2695, 10, true); got != "" {
+		t.Fatalf("disabled min stop must pass, got %q", got)
+	}
+}
+
 func TestLastIndexAtOrBefore(t *testing.T) {
 	origin := time.Unix(0, 0).UTC()
 	bars := synthBars(4, 100, 1, time.Hour, origin, 0)

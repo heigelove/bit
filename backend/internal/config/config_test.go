@@ -23,8 +23,11 @@ func TestLoadShippedConfig(t *testing.T) {
 	if cfg.Strategy.Trend.ADXRisingBars != 2 {
 		t.Fatalf("adx_rising_bars = %d, want 2", cfg.Strategy.Trend.ADXRisingBars)
 	}
-	if cfg.Strategy.Trend.EMASepMinATR != 0.4 {
-		t.Fatalf("ema_sep_min_atr = %v, want 0.4", cfg.Strategy.Trend.EMASepMinATR)
+	if cfg.Strategy.Trend.EMASepMinATR != 1.0 {
+		t.Fatalf("ema_sep_min_atr = %v, want 1.0", cfg.Strategy.Trend.EMASepMinATR)
+	}
+	if cfg.Strategy.Trend.MinStopATR != 1.0 {
+		t.Fatalf("min_stop_atr = %v, want 1.0", cfg.Strategy.Trend.MinStopATR)
 	}
 	if !cfg.Strategy.Trend.UseDIFilter {
 		t.Fatal("use_di_filter should be enabled")

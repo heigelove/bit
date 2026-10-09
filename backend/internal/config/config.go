@@ -74,6 +74,9 @@ type TrendConfig struct {
 	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
 	UseDIFilter    bool    `yaml:"use_di_filter"`     // long needs +DI > −DI (and vice versa)
 	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`   // fresh EMA cross needs ADX ≥ ADXMin + bonus
+	// MinStopATR rejects an entry whose stop is tighter than this × higher-TF ATR.
+	// 15m ATR stops otherwise size the position up and get shaken out in 1h noise.
+	MinStopATR float64 `yaml:"min_stop_atr"`
 
 	// Re-entry gates after a stop: skip the same EMA touch until it resets.
 	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
