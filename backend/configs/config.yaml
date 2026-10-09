@@ -54,12 +54,22 @@ strategy:
     use_htf_atr: true      # 止损/跟踪用 1h ATR，避免 15m 噪声扫出
     trail_after_r: 1.0     # 浮盈未到 1R 前不收紧止损
     pullback_htf_max_atr: 0.8  # 弱趋势：15m 入场必须靠近 1h EMA20
-    continuation_adx: 28       # ADX ≥ 28 视为单边延续，允许 15m 旗形远离 1h EMA20
+    continuation_adx: 28       # ADX ≥ 28 才做旗形；再抬高会漏掉单边里的大单
     continuation_htf_max_atr: 0  # 0 = 延续单不限制距 1h EMA20（仍须 15m 回踩 EMA20）
     require_bar_confirm: true  # 入场 K 线必须收在顺势一侧
     close_confirm_frac: 0.55
     allow_ltf_cross: false     # 关掉 15m EMA 金叉/死叉（噪声大）
+    allow_ltf_pullback: false  # 关掉 15m 回踩入场：容易被下一根 1h 收盘打脸
     allow_htf_cross: true      # 1h EMA20/60 交叉可开仓（抓趋势起点）
+    allow_htf_pullback: true   # 1h 回踩 EMA20
+    htf_pullback_confirm: true # 回踩当根不进，下一根 1h 仍站上均线才进（过滤假收回）
+    htf_pullback_min_atr: 0.15 # 确认根收盘须离开 EMA20 至少 0.15×ATR
+    allow_htf_flag: true       # 单边：1h 收缩停顿后再突破（不必回到 EMA20）
+    flag_pause_bars: 3         # 突破前至少 3 根 1h 停在更早那根的高/低之内
+    flag_max_range_atr: 1.5    # 停顿区间不超过 1.5×1h ATR，过滤宽幅震荡
+    flag_min_break_atr: 0.15   # 收盘须打穿停顿端 0.15×ATR，过滤假突破
+    flag_max_ext_atr: 2.5      # 离 1h EMA20 超过 2.5×ATR 不追
+    exit_on_ema20_loss: false  # 持仓不因「收盘丢 EMA20」立刻平：那是入场位，会把止损变成几块钱
     # 止损后禁止立刻在同一 EMA 再进
     reentry_atr: 0.25      # |现价−上次开仓价| 小于此×ATR 则拒绝
     reentry_cooldown: 4    # 离场后至少再等 N 根入场周期 K 线（15m）

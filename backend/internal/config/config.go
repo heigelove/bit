@@ -92,10 +92,26 @@ type TrendConfig struct {
 	// BarConfirm (default on): entry bar must close in the trade's favor.
 	RequireBarConfirm *bool   `yaml:"require_bar_confirm"`
 	CloseConfirmFrac  float64 `yaml:"close_confirm_frac"`
-	// AllowLTFCross (default off): 15m EMA20/60 crosses are noisy; pullbacks only.
+	// AllowLTFCross (default off): 15m EMA20/60 crosses are noisy.
 	AllowLTFCross *bool `yaml:"allow_ltf_cross"`
+	// AllowLTFPullback (default off): 15m EMA20 wicks fire too often vs 1h trend.
+	AllowLTFPullback *bool `yaml:"allow_ltf_pullback"`
 	// AllowHTFCross (default on): 1h EMA20/60 cross may open on the completing 15m bar.
 	AllowHTFCross *bool `yaml:"allow_htf_cross"`
+	// AllowHTFPullback (default on): 1h wick to 1h EMA20 that closes back in trend.
+	AllowHTFPullback *bool   `yaml:"allow_htf_pullback"`
+	HTFPullbackMinATR float64 `yaml:"htf_pullback_min_atr"` // confirm close must clear EMA20 by this × ATR
+	// HTFPullbackConfirm (default on): enter on the NEXT 1h bar if it still holds EMA20.
+	HTFPullbackConfirm *bool `yaml:"htf_pullback_confirm"`
+	// AllowHTFFlag (default on): 1h pause then break, for trends that never tag EMA20.
+	AllowHTFFlag     *bool   `yaml:"allow_htf_flag"`
+	FlagPauseBars    int     `yaml:"flag_pause_bars"`     // bars that must contract before the break
+	FlagMaxRangeATR  float64 `yaml:"flag_max_range_atr"`  // pause high−low must be ≤ this × 1h ATR
+	FlagMinBreakATR  float64 `yaml:"flag_min_break_atr"`  // close must clear the pause by this × ATR
+	FlagMaxExtATR    float64 `yaml:"flag_max_ext_atr"`    // reject if close is farther than this × ATR from EMA20
+	// ExitOnEMA20Loss (default off): flattening when 1h loses EMA20 fights pullback entries
+	// (enter at EMA20, exit at EMA20). Trail + EMA20/60 cross remain the exits.
+	ExitOnEMA20Loss *bool `yaml:"exit_on_ema20_loss"`
 
 	// Re-entry gates after a stop: skip the same EMA touch until it resets.
 	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
@@ -171,6 +187,26 @@ func (t TrendConfig) LTFCrossAllowed() bool {
 
 func (t TrendConfig) HTFCrossAllowed() bool {
 	return t.AllowHTFCross == nil || *t.AllowHTFCross
+}
+
+func (t TrendConfig) LTFPullbackAllowed() bool {
+	return t.AllowLTFPullback != nil && *t.AllowLTFPullback
+}
+
+func (t TrendConfig) HTFPullbackAllowed() bool {
+	return t.AllowHTFPullback == nil || *t.AllowHTFPullback
+}
+
+func (t TrendConfig) HTFPullbackConfirmEnabled() bool {
+	return t.HTFPullbackConfirm == nil || *t.HTFPullbackConfirm
+}
+
+func (t TrendConfig) HTFFlagAllowed() bool {
+	return t.AllowHTFFlag == nil || *t.AllowHTFFlag
+}
+
+func (t TrendConfig) ExitOnEMA20LossEnabled() bool {
+	return t.ExitOnEMA20Loss != nil && *t.ExitOnEMA20Loss
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.

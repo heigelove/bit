@@ -44,11 +44,32 @@ func TestLoadShippedConfig(t *testing.T) {
 	if cfg.Strategy.Trend.ContinuationADX != 28 {
 		t.Fatalf("continuation_adx = %v, want 28", cfg.Strategy.Trend.ContinuationADX)
 	}
+	if cfg.Strategy.Trend.FlagPauseBars != 3 {
+		t.Fatalf("flag_pause_bars = %d, want 3", cfg.Strategy.Trend.FlagPauseBars)
+	}
+	if cfg.Strategy.Trend.FlagMaxRangeATR != 1.5 {
+		t.Fatalf("flag_max_range_atr = %v, want 1.5", cfg.Strategy.Trend.FlagMaxRangeATR)
+	}
 	if cfg.Strategy.Trend.ADXRisingExempt != 30 {
 		t.Fatalf("adx_rising_exempt = %v, want 30", cfg.Strategy.Trend.ADXRisingExempt)
 	}
 	if !cfg.Strategy.Trend.HTFCrossAllowed() {
 		t.Fatal("allow_htf_cross should be enabled")
+	}
+	if cfg.Strategy.Trend.LTFPullbackAllowed() {
+		t.Fatal("15m pullback entries should stay off")
+	}
+	if !cfg.Strategy.Trend.HTFPullbackAllowed() {
+		t.Fatal("1h pullback entries should be enabled")
+	}
+	if cfg.Strategy.Trend.HTFPullbackMinATR != 0.15 {
+		t.Fatalf("htf_pullback_min_atr = %v, want 0.15", cfg.Strategy.Trend.HTFPullbackMinATR)
+	}
+	if !cfg.Strategy.Trend.HTFPullbackConfirmEnabled() || !cfg.Strategy.Trend.HTFFlagAllowed() {
+		t.Fatal("1h pullback confirm and flag breakout should be enabled")
+	}
+	if cfg.Strategy.Trend.ExitOnEMA20LossEnabled() {
+		t.Fatal("exit_on_ema20_loss should stay off")
 	}
 	if !cfg.Strategy.Trend.HTFATREnabled() || !cfg.Strategy.Trend.WidenMinStopEnabled() || !cfg.Strategy.Trend.BarConfirmRequired() {
 		t.Fatal("htf atr / widen stop / bar confirm should be enabled")
@@ -134,6 +155,18 @@ func TestFiltersDefaultOn(t *testing.T) {
 	}
 	if !tr.HTFCrossAllowed() {
 		t.Fatal("omitted allow_htf_cross must default to enabled")
+	}
+	if tr.LTFPullbackAllowed() {
+		t.Fatal("omitted allow_ltf_pullback must default to disabled")
+	}
+	if !tr.HTFPullbackAllowed() {
+		t.Fatal("omitted allow_htf_pullback must default to enabled")
+	}
+	if !tr.HTFPullbackConfirmEnabled() || !tr.HTFFlagAllowed() {
+		t.Fatal("omitted pullback confirm / flag must default to enabled")
+	}
+	if tr.ExitOnEMA20LossEnabled() {
+		t.Fatal("omitted exit_on_ema20_loss must default to disabled")
 	}
 	tr.RequireEMA20Side = &off
 	if tr.EMA20SideRequired() {

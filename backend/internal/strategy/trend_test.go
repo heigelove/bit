@@ -130,8 +130,8 @@ func TestMTFClosesOnHigherTFFlip(t *testing.T) {
 	if sig.Action != types.ActionCloseLong {
 		t.Fatalf("expected close long on 1h flip, got %s (%s)", sig.Action, sig.Reason)
 	}
-	if sig.Reason != "ema cross down" && sig.Reason != "trail stop hit" && !strings.Contains(sig.Reason, "EMA20") {
-		t.Fatalf("expected 1h flip, trail, or lost EMA20, got %q", sig.Reason)
+	if sig.Reason != "ema cross down" && sig.Reason != "trail stop hit" {
+		t.Fatalf("expected 1h flip or trail, got %q", sig.Reason)
 	}
 }
 
@@ -188,18 +188,40 @@ func TestTrendReentryNeedsHTFReclaim(t *testing.T) {
 	}
 }
 
-func TestTrendClosesLongWhenHTFLosesEMA20(t *testing.T) {
+func TestTrendHoldsThroughEMA20Retest(t *testing.T) {
 	s := NewTrendFollow("ETHUSDT", testTrendCfg())
 	s.SyncPosition(true, false, 150, 1)
 	htf, ltf := alignedBars(80, 80, 100, 0.5, 100, 0.5, time.Hour, 15*time.Minute, 0)
 	dumpLast(htf, 1, 4)
 
 	sig := s.Evaluate(htf, MarketContext{Entry: ltf})
-	if sig.Action != types.ActionCloseLong {
-		t.Fatalf("expected close long after 1h lost EMA20, got %s (%s)", sig.Action, sig.Reason)
+	if sig.Action == types.ActionCloseLong && strings.Contains(sig.Reason, "EMA20") {
+		t.Fatalf("must not flatten just because 1h retested EMA20, got %q", sig.Reason)
 	}
-	if !strings.Contains(sig.Reason, "EMA20") && sig.Reason != "trail stop hit" {
-		t.Fatalf("expected lost EMA20 or trail, got %q", sig.Reason)
+}
+
+func TestHTFFlagBreak(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.ContinuationADX = 28
+	s.tr.FlagPauseBars = 2
+	s.tr.FlagMaxRangeATR = 5
+	s.tr.FlagMinBreakATR = 0
+	s.tr.FlagMaxExtATR = 10
+	// anchor high 12, pause highs 11 and 10.5 (both below anchor), break close 12.
+	highs := []float64{10, 12, 11, 10.5, 13}
+	lows := []float64{8, 9, 8.5, 8.2, 10}
+	closes := []float64{9, 11, 10.2, 9.5, 12}
+	ema := []float64{8, 8.2, 8.4, 8.5, 8.6}
+	atr := []float64{1, 1, 1, 1, 1}
+	if !s.htfFlagBreak(true, highs, lows, closes, ema, atr, 35, 4) {
+		t.Fatal("tight pause then close through it should break out")
+	}
+	highs[3] = 12.5 // pause already took out the anchor
+	if s.htfFlagBreak(true, highs, lows, closes, ema, atr, 35, 4) {
+		t.Fatal("a pause that already made a new high is not a flag")
+	}
+	if s.htfFlagBreak(true, highs, lows, closes, ema, atr, 20, 4) {
+		t.Fatal("weak ADX must not use the flag path")
 	}
 }
 
@@ -264,6 +286,30 @@ func TestHTFPullbackBlock(t *testing.T) {
 	}
 	if got := s.htfPullbackBlock(200, 100, 10, 0, false, false); got != "" {
 		t.Fatalf("single-TF must skip the 1h proximity gate, got %q", got)
+	}
+}
+
+func TestFreshEMAPullback(t *testing.T) {
+	if !freshEMAPullback(true, 101, 103, 100, 99, 102, 101.5, 100, 98) {
+		t.Fatal("long wick-to-EMA then close above should count")
+	}
+	if freshEMAPullback(true, 99, 103, 100, 99, 102, 101.5, 100, 98) {
+		t.Fatal("previous bar already below EMA is not a fresh pullback")
+	}
+	if freshEMAPullback(false, 97, 101, 100, 98, 101, 99, 100, 102) {
+		t.Fatal("previous bar already above EMA is not a fresh short pullback")
+	}
+	if !freshEMAPullback(false, 97, 99, 100, 98, 101, 99, 100, 102) {
+		t.Fatal("short wick-to-EMA then close below should count")
+	}
+}
+
+func TestMTFDoesNotEnterOn15mPullback(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	htf, ltf := alignedBars(80, 80, 100, 0.5, 100, 0.5, time.Hour, 15*time.Minute, 1.5)
+	sig := s.Evaluate(htf, MarketContext{Entry: ltf})
+	if sig.Action.IsOpen() && strings.Contains(sig.Reason, "15m pullback") {
+		t.Fatalf("15m pullback entries must stay off, got %s (%s)", sig.Action, sig.Reason)
 	}
 }
 

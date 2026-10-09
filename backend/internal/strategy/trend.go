@@ -14,7 +14,7 @@ import (
 // When the engine supplies a smaller entry timeframe (typically 15m) alongside
 // the primary trend bars (typically 1h):
 //   - primary: direction, chop gates, EMA200, 1h EMA cross, trail, trend-flip exit
-//   - entry:   15m pullback timing; in a strong ADX trend this may be far from 1h EMA20
+//   - entry:   15m only aligns to 1h closes by default; pullbacks are 1h EMA20 wicks
 // A still-bullish EMA20/60 stack does not authorize longs once the 1h close or
 // the current price has lost 1h EMA20; that is the early-drop window where
 // 15m pullbacks would otherwise keep buying.
@@ -172,12 +172,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
-		// Flatten on a closed 1h loss of EMA20, not a 15m dip through it.
-		if reason := s.ema20SideBlock(true, tc[j], tc[j], tFast[j], mtf); reason != "" {
-			sig.Action = types.ActionCloseLong
-			sig.Reason = reason
-			s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
-			return sig
+		if s.tr.ExitOnEMA20LossEnabled() {
+			if reason := s.ema20SideBlock(true, tc[j], tc[j], tFast[j], mtf); reason != "" {
+				sig.Action = types.ActionCloseLong
+				sig.Reason = reason
+				s.lock.ArmOnFlatten(PositionState{Long: true, Entry: s.entryPrice}, PositionState{})
+				return sig
+			}
 		}
 		sig.Reason = "hold long"
 		return sig
@@ -197,11 +198,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
 			return sig
 		}
-		if reason := s.ema20SideBlock(false, tc[j], tc[j], tFast[j], mtf); reason != "" {
-			sig.Action = types.ActionCloseShort
-			sig.Reason = reason
-			s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
-			return sig
+		if s.tr.ExitOnEMA20LossEnabled() {
+			if reason := s.ema20SideBlock(false, tc[j], tc[j], tFast[j], mtf); reason != "" {
+				sig.Action = types.ActionCloseShort
+				sig.Reason = reason
+				s.lock.ArmOnFlatten(PositionState{Short: true, Entry: s.entryPrice}, PositionState{})
+				return sig
+			}
 		}
 		sig.Reason = "hold short"
 		return sig
@@ -259,21 +262,23 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		crossedUp = eFast[prev] <= eSlow[prev] && eFast[i] > eSlow[i]
 		crossedDown = eFast[prev] >= eSlow[prev] && eFast[i] < eSlow[i]
 	}
-	// Pullback is a fresh touch, not a state: the previous bar must have stayed
-	// on the trend side of EMA20, otherwise every bar glued to the average
-	// after a stop-hunt re-fires.
-	prevAwayLong := prev >= 0 && !math.IsNaN(eFast[prev]) && el[prev] > eFast[prev]
-	prevAwayShort := prev >= 0 && !math.IsNaN(eFast[prev]) && eh[prev] < eFast[prev]
-	pullbackLong := bullTrend && eFast[i] > eSlow[i] && el[i] <= eFast[i] && price > eFast[i] && prevAwayLong
-	pullbackShort := bearTrend && eFast[i] < eSlow[i] && eh[i] >= eFast[i] && price < eFast[i] && prevAwayShort
+	pullbackLong := false
+	pullbackShort := false
+	if prev >= 0 {
+		pullbackLong = bullTrend && freshEMAPullback(true, el[prev], eh[prev], eFast[prev], el[i], eh[i], price, eFast[i], eSlow[i])
+		pullbackShort = bearTrend && freshEMAPullback(false, el[prev], eh[prev], eFast[prev], el[i], eh[i], price, eFast[i], eSlow[i])
+	}
+	if mtf && !s.tr.LTFPullbackAllowed() {
+		pullbackLong = false
+		pullbackShort = false
+	}
 
-	// Fresh 15m crosses are the noisiest setup; MTF defaults to pullbacks only.
+	// Fresh 15m crosses are the noisiest setup; MTF defaults them off.
 	if mtf && !s.tr.LTFCrossAllowed() {
 		crossedUp = false
 		crossedDown = false
 	}
 	crossADXFloor := s.tr.ADXMin + s.tr.CrossADXBonus
-	// Fresh crosses are noisy in mild trends: demand a stronger ADX reading.
 	if !mtf {
 		if crossedUp && tADX[j] < crossADXFloor {
 			crossedUp = false
@@ -283,24 +288,30 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		}
 	}
 
-	// 1h EMA20/60 cross: catch the start of a one-sided move. Only fire on the
-	// 15m bar that completes that 1h candle, otherwise it would re-trigger all hour.
+	htfJustClosed := !mtf || entry[i].CloseTime.Equal(trend[j].CloseTime)
 	htfCrossedUp := false
 	htfCrossedDown := false
-	if s.tr.HTFCrossAllowed() && j > 0 && !anyNaN(tFast[j-1], tSlow[j-1]) {
-		htfJustClosed := !mtf || entry[i].CloseTime.Equal(trend[j].CloseTime)
-		if htfJustClosed {
-			htfCrossedUp = tFast[j-1] <= tSlow[j-1] && tFast[j] > tSlow[j] && tADX[j] >= crossADXFloor
-			htfCrossedDown = tFast[j-1] >= tSlow[j-1] && tFast[j] < tSlow[j] && tADX[j] >= crossADXFloor
-		}
+	if s.tr.HTFCrossAllowed() && htfJustClosed && j > 0 && !anyNaN(tFast[j-1], tSlow[j-1]) {
+		htfCrossedUp = tFast[j-1] <= tSlow[j-1] && tFast[j] > tSlow[j] && tADX[j] >= crossADXFloor
+		htfCrossedDown = tFast[j-1] >= tSlow[j-1] && tFast[j] < tSlow[j] && tADX[j] >= crossADXFloor
 	}
 
-	// Chase-distance only applies to 15m EMA crosses. Pullbacks sit on the 15m
-	// average by construction; 1h crosses happen after a run and would otherwise
-	// be blocked by 15m chase_max_atr.
+	htfPullbackLong, htfPullbackShort := false, false
+	if htfJustClosed {
+		htfPullbackLong, htfPullbackShort = s.htfPullbackSetups(bullTrend, bearTrend, tl, th, tc, tFast, tSlow, tATR, j)
+	}
+	htfFlagLong := false
+	htfFlagShort := false
+	if htfJustClosed {
+		htfFlagLong = bullTrend && s.htfFlagBreak(true, th, tl, tc, tFast, tATR, tADX[j], j)
+		htfFlagShort = bearTrend && s.htfFlagBreak(false, th, tl, tc, tFast, tATR, tADX[j], j)
+	}
+
+	// Chase-distance only applies to 15m EMA crosses.
 	distEMA := math.Abs(price - eFast[i])
 	chasing := distEMA > s.tr.ChaseMaxATR*eATR[i]
-	if chasing && (crossedUp || crossedDown) && !pullbackLong && !pullbackShort && !htfCrossedUp && !htfCrossedDown {
+	htfSetup := htfCrossedUp || htfCrossedDown || htfPullbackLong || htfPullbackShort || htfFlagLong || htfFlagShort
+	if chasing && (crossedUp || crossedDown) && !pullbackLong && !pullbackShort && !htfSetup {
 		sig.Reason = "too far from EMA20, no chase"
 		return sig
 	}
@@ -318,7 +329,7 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		swingHigh = indicators.SwingHigh(th, j, s.swingLookback)
 	}
 
-	if bullTrend && (crossedUp || pullbackLong || htfCrossedUp) {
+	if bullTrend && (crossedUp || pullbackLong || htfCrossedUp || htfPullbackLong || htfFlagLong) {
 		if reason := s.directionBlock(true, plusDI[j], minusDI[j], tSlow, tATR, j); reason != "" {
 			if mtf {
 				sig.Reason = "1h " + reason
@@ -327,12 +338,16 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			}
 			return sig
 		}
-		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], tADX[j], mtf, htfCrossedUp); reason != "" {
+		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], tADX[j], mtf, htfCrossedUp || htfPullbackLong || htfFlagLong); reason != "" {
 			sig.Reason = reason
 			return sig
 		}
 		if !htfCrossedUp {
-			if reason := s.barConfirmBlock(entry[i], true); reason != "" {
+			confirm := entry[i]
+			if htfPullbackLong || htfFlagLong {
+				confirm = trend[j]
+			}
+			if reason := s.barConfirmBlock(confirm, true); reason != "" {
 				sig.Reason = reason
 				return sig
 			}
@@ -355,11 +370,11 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		sig.StopLoss = stop
 		s.trailStop = stop
 		s.lock.NoteEntry(true, price, eFast[i])
-		sig.Reason = s.entryReason(mtf, true, crossedUp, htfCrossedUp)
+		sig.Reason = s.entryReason(mtf, true, crossedUp, htfCrossedUp, htfPullbackLong, htfFlagLong)
 		return sig
 	}
 
-	if bearTrend && (crossedDown || pullbackShort || htfCrossedDown) {
+	if bearTrend && (crossedDown || pullbackShort || htfCrossedDown || htfPullbackShort || htfFlagShort) {
 		if reason := s.directionBlock(false, plusDI[j], minusDI[j], tSlow, tATR, j); reason != "" {
 			if mtf {
 				sig.Reason = "1h " + reason
@@ -368,12 +383,16 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			}
 			return sig
 		}
-		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], tADX[j], mtf, htfCrossedDown); reason != "" {
+		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], tADX[j], mtf, htfCrossedDown || htfPullbackShort || htfFlagShort); reason != "" {
 			sig.Reason = reason
 			return sig
 		}
 		if !htfCrossedDown {
-			if reason := s.barConfirmBlock(entry[i], false); reason != "" {
+			confirm := entry[i]
+			if htfPullbackShort || htfFlagShort {
+				confirm = trend[j]
+			}
+			if reason := s.barConfirmBlock(confirm, false); reason != "" {
 				sig.Reason = reason
 				return sig
 			}
@@ -396,7 +415,7 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		sig.StopLoss = stop
 		s.trailStop = stop
 		s.lock.NoteEntry(false, price, eFast[i])
-		sig.Reason = s.entryReason(mtf, false, crossedDown, htfCrossedDown)
+		sig.Reason = s.entryReason(mtf, false, crossedDown, htfCrossedDown, htfPullbackShort, htfFlagShort)
 		return sig
 	}
 
@@ -527,12 +546,24 @@ func (s *TrendFollow) reentryBlock(long bool, price, edge, atr float64, bars []t
 	return s.lock.Block(long, price, edge, atr, s.tr.ReentryATR, s.tr.ReentryCooldown, held, s.tr.ResetRequired())
 }
 
-func (s *TrendFollow) entryReason(mtf, long, ltfCross, htfCross bool) string {
+func (s *TrendFollow) entryReason(mtf, long, ltfCross, htfCross, htfPullback, htfFlag bool) string {
 	if htfCross {
 		if long {
 			return "1h EMA cross up"
 		}
 		return "1h EMA cross down"
+	}
+	if htfPullback {
+		if long {
+			return "1h pullback to EMA20 reclaim"
+		}
+		return "1h pullback to EMA20 reject"
+	}
+	if htfFlag {
+		if long {
+			return "1h flag breakout"
+		}
+		return "1h flag breakdown"
 	}
 	if mtf {
 		if long {
@@ -640,4 +671,108 @@ func (s *TrendFollow) directionBlock(long bool, plusDI, minusDI float64, emaSlow
 		}
 	}
 	return ""
+}
+
+// freshEMAPullback is a one-bar touch-and-reclaim of the fast EMA, not a state
+// of sitting on the average. Previous bar must have stayed on the trend side.
+func freshEMAPullback(long bool, prevLow, prevHigh, prevFast, low, high, close, fast, slow float64) bool {
+	if anyNaN(prevFast, fast, slow) {
+		return false
+	}
+	if long {
+		if fast <= slow {
+			return false
+		}
+		return prevLow > prevFast && low <= fast && close > fast
+	}
+	if fast >= slow {
+		return false
+	}
+	return prevHigh < prevFast && high >= fast && close < fast
+}
+
+func (s *TrendFollow) htfPullbackSetups(bull, bear bool, tl, th, tc, tFast, tSlow, tATR []float64, j int) (long, short bool) {
+	if !s.tr.HTFPullbackAllowed() || j < 1 {
+		return
+	}
+	minBeyond := s.tr.HTFPullbackMinATR
+	clear := func(isLong bool, close, ema, atr float64) bool {
+		if minBeyond <= 0 || atr <= 0 {
+			return true
+		}
+		if isLong {
+			return close >= ema+minBeyond*atr
+		}
+		return close <= ema-minBeyond*atr
+	}
+	if s.tr.HTFPullbackConfirmEnabled() {
+		if j < 2 {
+			return
+		}
+		touchL := freshEMAPullback(true, tl[j-2], th[j-2], tFast[j-2], tl[j-1], th[j-1], tc[j-1], tFast[j-1], tSlow[j-1])
+		touchS := freshEMAPullback(false, tl[j-2], th[j-2], tFast[j-2], tl[j-1], th[j-1], tc[j-1], tFast[j-1], tSlow[j-1])
+		long = bull && touchL && tc[j] > tFast[j] && clear(true, tc[j], tFast[j], tATR[j])
+		short = bear && touchS && tc[j] < tFast[j] && clear(false, tc[j], tFast[j], tATR[j])
+		return
+	}
+	long = bull && freshEMAPullback(true, tl[j-1], th[j-1], tFast[j-1], tl[j], th[j], tc[j], tFast[j], tSlow[j]) && clear(true, tc[j], tFast[j], tATR[j])
+	short = bear && freshEMAPullback(false, tl[j-1], th[j-1], tFast[j-1], tl[j], th[j], tc[j], tFast[j], tSlow[j]) && clear(false, tc[j], tFast[j], tATR[j])
+	return
+}
+
+// htfFlagBreak is a contraction then a close through it. The bars before the
+// signal must stay inside the bar that started the pause, and the whole pause
+// must be tight, so a one-bar dip-and-rip does not count.
+func (s *TrendFollow) htfFlagBreak(long bool, highs, lows, closes, emaFast, atr []float64, adx float64, j int) bool {
+	if !s.tr.HTFFlagAllowed() || s.tr.ContinuationADX <= 0 || adx < s.tr.ContinuationADX {
+		return false
+	}
+	pause := s.tr.FlagPauseBars
+	if pause < 2 {
+		pause = 2
+	}
+	// pause bars are [j-pause, j-1]; the anchor is the bar before them.
+	anchor := j - pause - 1
+	if anchor < 0 || atr[j] <= 0 || math.IsNaN(atr[j]) || math.IsNaN(emaFast[j]) || math.IsNaN(closes[j]) {
+		return false
+	}
+	maxH, minL := highs[j-pause], lows[j-pause]
+	for k := j - pause; k < j; k++ {
+		if math.IsNaN(highs[k]) || math.IsNaN(lows[k]) {
+			return false
+		}
+		if highs[k] > maxH {
+			maxH = highs[k]
+		}
+		if lows[k] < minL {
+			minL = lows[k]
+		}
+	}
+	if maxR := s.tr.FlagMaxRangeATR; maxR > 0 && maxH-minL > maxR*atr[j] {
+		return false
+	}
+	minBreak := s.tr.FlagMinBreakATR * atr[j]
+	if long {
+		if closes[j] <= emaFast[j] {
+			return false
+		}
+		if maxExt := s.tr.FlagMaxExtATR; maxExt > 0 && closes[j]-emaFast[j] > maxExt*atr[j] {
+			return false
+		}
+		// Pause must not have already taken out the anchor high.
+		if maxH >= highs[anchor] {
+			return false
+		}
+		return closes[j] >= maxH+minBreak
+	}
+	if closes[j] >= emaFast[j] {
+		return false
+	}
+	if maxExt := s.tr.FlagMaxExtATR; maxExt > 0 && emaFast[j]-closes[j] > maxExt*atr[j] {
+		return false
+	}
+	if minL <= lows[anchor] {
+		return false
+	}
+	return closes[j] <= minL-minBreak
 }
