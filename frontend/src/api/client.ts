@@ -134,4 +134,87 @@ export const api = {
     if (symbol) q.set('symbol', symbol)
     return request<PageResult<TradeRow>>(`/api/trades?${q}`)
   },
+  backtestDefaults() {
+    return request<BacktestDefaults>('/api/backtest/defaults')
+  },
+  backtest(body: BacktestRequest) {
+    return request<BacktestResult>('/api/backtest', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+}
+
+export type BacktestDefaults = {
+  symbol: string
+  strategy: string
+  strategies: string[]
+  primary: string
+  entry: string
+  initial_balance: number
+  fee_rate: number
+  slippage_bps: number
+  min_bars: number
+  leverage: number
+}
+
+export type BacktestRequest = {
+  strategy: string
+  symbol: string
+  start: string
+  end: string
+  initial_balance: number
+}
+
+export type PriceBar = {
+  ts: string
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export type BacktestFill = {
+  ts: string
+  side: string
+  action: string
+  quantity: number
+  price: number
+  fee: number
+  pnl: number
+  reason: string
+  equity: number
+}
+
+export type BacktestStats = {
+  final_equity: number
+  total_pnl: number
+  return_pct: number
+  trades: number
+  wins: number
+  losses: number
+  win_rate: number
+  profit_factor: number
+  avg_win: number
+  avg_loss: number
+  max_drawdown: number
+  max_drawdown_pct: number
+  max_consecutive_loss: number
+  fees: number
+}
+
+export type BacktestResult = {
+  strategy: string
+  symbol: string
+  primary: string
+  entry: string
+  start: string
+  end: string
+  primary_bars: number
+  entry_bars: number
+  initial_balance: number
+  stats: BacktestStats
+  equity: EquityPoint[]
+  price: PriceBar[]
+  fills: BacktestFill[]
 }

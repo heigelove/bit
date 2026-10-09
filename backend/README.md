@@ -31,4 +31,6 @@ go run ./cmd/api -config configs/config.yaml
 | GET | `/api/logs` | 是 | 日志分页 |
 | GET | `/api/trades` | 是 | 成交分页 |
 | GET | `/api/signals` | 是 | 信号分页 |
+| GET | `/api/backtest/defaults` | 是 | 回测表单默认值 |
+| POST | `/api/backtest` | 是 | 拉取历史 K 线并回测 |
 | GET | `/api/health` | 否 | 健康检查 |

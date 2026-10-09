@@ -165,6 +165,41 @@ button {
   margin-bottom: 18px;
 }
 
+.metrics-6 {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 16px;
+  padding: 18px;
+}
+
+.form-grid .field {
+  margin-bottom: 0;
+}
+
+.form-grid .field span {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.form-grid select,
+.form-grid input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.form-hint p {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .metric {
   padding: 18px 18px 16px;
   animation: rise 0.45s ease both;
@@ -437,6 +472,12 @@ table.data tbody tr:hover {
   }
 }
 
+@media (max-width: 1200px) {
+  .metrics-6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -450,6 +491,8 @@ table.data tbody tr:hover {
     flex-wrap: wrap;
   }
   .metrics,
+  .metrics-6,
+  .form-grid,
   .grid-2 {
     grid-template-columns: 1fr 1fr;
   }
@@ -559,6 +602,8 @@ table.data tbody tr.row-clickable:hover {
     padding: 20px 16px 36px;
   }
   .metrics,
+  .metrics-6,
+  .form-grid,
   .grid-2 {
     grid-template-columns: 1fr;
   }

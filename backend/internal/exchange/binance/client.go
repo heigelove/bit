@@ -53,16 +53,90 @@ func (c *Client) ServerTime(ctx context.Context) (time.Time, error) {
 	return time.UnixMilli(resp.ServerTime), nil
 }
 
-// Klines fetches OHLCV candles. interval e.g. 1h, 15m.
+const klinePageLimit = 1500
+
+// Klines fetches the most recent OHLCV candles. interval e.g. 1h, 15m.
 func (c *Client) Klines(ctx context.Context, symbol, interval string, limit int) ([]types.Kline, error) {
+	return c.klinesPage(ctx, symbol, interval, time.Time{}, time.Time{}, limit)
+}
+
+// KlinesRange pages through public klines from start (inclusive) to end
+// (inclusive by open time). Empty end means now. Binance caps each call at 1500.
+func (c *Client) KlinesRange(ctx context.Context, symbol, interval string, start, end time.Time) ([]types.Kline, error) {
+	if end.IsZero() {
+		end = time.Now().UTC()
+	}
+	if start.IsZero() {
+		return nil, fmt.Errorf("klines range: start is required")
+	}
+	if !start.Before(end) {
+		return nil, fmt.Errorf("klines range: start must be before end")
+	}
+	var out []types.Kline
+	cursor := start
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page, err := c.klinesPage(ctx, symbol, interval, cursor, end, klinePageLimit)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		got := len(page)
+		if n := len(out); n > 0 {
+			lastOpen := out[n-1].OpenTime
+			for len(page) > 0 && !page[0].OpenTime.After(lastOpen) {
+				page = page[1:]
+			}
+		}
+		out = append(out, page...)
+		if got < klinePageLimit {
+			break
+		}
+		last := out[len(out)-1]
+		cursor = last.OpenTime.Add(time.Millisecond)
+		if !cursor.Before(end) {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) klinesPage(ctx context.Context, symbol, interval string, start, end time.Time, limit int) ([]types.Kline, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > klinePageLimit {
+		limit = klinePageLimit
+	}
 	q := url.Values{}
 	q.Set("symbol", strings.ToUpper(symbol))
 	q.Set("interval", interval)
 	q.Set("limit", strconv.Itoa(limit))
+	if !start.IsZero() {
+		q.Set("startTime", strconv.FormatInt(start.UnixMilli(), 10))
+	}
+	if !end.IsZero() {
+		q.Set("endTime", strconv.FormatInt(end.UnixMilli(), 10))
+	}
 	body, err := c.doPublic(ctx, http.MethodGet, "/fapi/v1/klines", q)
 	if err != nil {
 		return nil, err
 	}
+	out, err := parseKlineRows(body)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(out); n > 0 && out[n-1].CloseTime.After(time.Now().UTC()) {
+		out[n-1].Closed = false
+	}
+	return out, nil
+}
+
+func parseKlineRows(body []byte) ([]types.Kline, error) {
 	var raw [][]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("decode klines: %w", err)
@@ -89,10 +163,6 @@ func (c *Client) Klines(ctx context.Context, symbol, interval string, limit int)
 			Volume:    v,
 			Closed:    true,
 		})
-	}
-	// Last candle may still be forming; mark last as open if close time in future.
-	if n := len(out); n > 0 && out[n-1].CloseTime.After(time.Now().UTC()) {
-		out[n-1].Closed = false
 	}
 	return out, nil
 }
@@ -227,15 +297,15 @@ func (c *Client) Account(ctx context.Context) (*types.AccountState, error) {
 
 // UserTrade is a USD-M account fill from /fapi/v1/userTrades.
 type UserTrade struct {
-	ID           int64
-	OrderID      int64
-	Symbol       string
-	Side         types.Side
-	Price        float64
-	Quantity     float64
-	RealizedPNL  float64
-	Commission   float64
-	Time         time.Time
+	ID          int64
+	OrderID     int64
+	Symbol      string
+	Side        types.Side
+	Price       float64
+	Quantity    float64
+	RealizedPNL float64
+	Commission  float64
+	Time        time.Time
 }
 
 const userTradesLimit = 1000

@@ -13,6 +13,7 @@ export function Layout() {
           <NavLink to="/" end>
             账户
           </NavLink>
+          <NavLink to="/backtest">策略回测</NavLink>
           <NavLink to="/trades">交易记录</NavLink>
           <NavLink to="/logs">日志</NavLink>
         </nav>

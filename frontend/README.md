@@ -1,6 +1,6 @@
 # BIT Frontend
 
-React + Vite 数据后台：登录、账户余额、交易记录、运行日志。
+React + Vite 数据后台：登录、账户余额、策略回测、交易记录、运行日志。
 
 ```bash
 npm install

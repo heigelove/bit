@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Layout } from './components/Layout'
 import { AccountPage } from './pages/AccountPage'
+import { BacktestPage } from './pages/BacktestPage'
 import { LoginPage } from './pages/LoginPage'
 import { LogsPage } from './pages/LogsPage'
 import { TradesPage } from './pages/TradesPage'
@@ -27,6 +28,7 @@ export default function App() {
           }
         >
           <Route index element={<AccountPage />} />
+          <Route path="backtest" element={<BacktestPage />} />
           <Route path="trades" element={<TradesPage />} />
           <Route path="logs" element={<LogsPage />} />
         </Route>

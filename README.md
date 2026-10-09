@@ -47,6 +47,7 @@ npm run dev
 |----|------|
 | 前端登录 | Token 鉴权 |
 | 账户页 | Redis 余额 / 持仓 / 风控 |
+| 策略回测 | 拉取币安历史 K 线，回放 trend / squeeze，展示权益与成交 |
 | 交易记录 | SQLite `trades` |
 | 日志列表 | SQLite `app_logs` |
 

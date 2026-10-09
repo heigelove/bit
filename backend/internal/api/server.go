@@ -62,6 +62,8 @@ func (s *Server) routes() {
 			auth.GET("/logs", s.handleLogs)
 			auth.GET("/trades", s.handleTrades)
 			auth.GET("/signals", s.handleSignals)
+			auth.GET("/backtest/defaults", s.handleBacktestDefaults)
+			auth.POST("/backtest", s.handleBacktest)
 		}
 	}
 }
