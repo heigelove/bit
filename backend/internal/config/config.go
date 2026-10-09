@@ -74,9 +74,21 @@ type TrendConfig struct {
 	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
 	UseDIFilter    bool    `yaml:"use_di_filter"`     // long needs +DI > −DI (and vice versa)
 	CrossADXBonus  float64 `yaml:"cross_adx_bonus"`   // fresh EMA cross needs ADX ≥ ADXMin + bonus
-	// MinStopATR rejects an entry whose stop is tighter than this × higher-TF ATR.
-	// 15m ATR stops otherwise size the position up and get shaken out in 1h noise.
-	MinStopATR float64 `yaml:"min_stop_atr"`
+	// MinStopATR is the floor vs higher-TF ATR. WidenMinStop (default on) stretches
+	// a tight 15m stop out to this distance; explicit false rejects the entry.
+	MinStopATR   float64 `yaml:"min_stop_atr"`
+	WidenMinStop *bool   `yaml:"widen_min_stop"`
+	// UseHTFATR (default on): size initial stop and trail from 1h ATR/swings, not 15m.
+	UseHTFATR *bool `yaml:"use_htf_atr"`
+	// TrailAfterR: do not ratchet the stop until price has moved this many R in favor.
+	TrailAfterR float64 `yaml:"trail_after_r"`
+	// PullbackHTFMaxATR: 15m entries must sit within this × 1h ATR of 1h EMA20.
+	PullbackHTFMaxATR float64 `yaml:"pullback_htf_max_atr"`
+	// BarConfirm (default on): entry bar must close in the trade's favor.
+	RequireBarConfirm *bool   `yaml:"require_bar_confirm"`
+	CloseConfirmFrac  float64 `yaml:"close_confirm_frac"`
+	// AllowLTFCross (default off): 15m EMA20/60 crosses are noisy; pullbacks only.
+	AllowLTFCross *bool `yaml:"allow_ltf_cross"`
 
 	// Re-entry gates after a stop: skip the same EMA touch until it resets.
 	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
@@ -132,6 +144,22 @@ func (t TrendConfig) ReentryHTFResetRequired() bool {
 
 func (t TrendConfig) EMA20SideRequired() bool {
 	return t.RequireEMA20Side == nil || *t.RequireEMA20Side
+}
+
+func (t TrendConfig) WidenMinStopEnabled() bool {
+	return t.WidenMinStop == nil || *t.WidenMinStop
+}
+
+func (t TrendConfig) HTFATREnabled() bool {
+	return t.UseHTFATR == nil || *t.UseHTFATR
+}
+
+func (t TrendConfig) BarConfirmRequired() bool {
+	return t.RequireBarConfirm == nil || *t.RequireBarConfirm
+}
+
+func (t TrendConfig) LTFCrossAllowed() bool {
+	return t.AllowLTFCross != nil && *t.AllowLTFCross
 }
 
 // SqueezeConfig tunes the volatility-compression breakout strategy.

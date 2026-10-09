@@ -28,6 +28,7 @@ type TrendFollow struct {
 	inShort       bool
 	trailStop     float64
 	entryPrice    float64
+	initStop      float64
 	swingLookback int
 	lock          ReentryLock
 }
@@ -50,6 +51,7 @@ func (s *TrendFollow) Sync(pos PositionState) {
 	was := PositionState{Long: s.inLong, Short: s.inShort, Entry: s.entryPrice}
 	s.lock.ArmOnFlatten(was, pos)
 	s.SyncPosition(pos.Long, pos.Short, pos.Entry, pos.Trail)
+	s.initStop = pos.InitStop
 }
 
 func (s *TrendFollow) SyncPosition(long, short bool, entry, trail float64) {
@@ -150,12 +152,13 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		bearTrend = bearTrend && tc[j] < tFilter[j] && price < tFilter[j]
 	}
 
-	// Manage open position: trail on the entry TF, invalidate on higher-TF flip.
+	// Manage open position: trail on HTF ATR (when enabled), invalidate on 1h flip.
+	trailATR := eATR[i]
+	if mtf && s.tr.HTFATREnabled() && !math.IsNaN(tATR[j]) && tATR[j] > 0 {
+		trailATR = tATR[j]
+	}
 	if s.inLong {
-		trail := price - s.tr.ATRTrailMult*eATR[i]
-		if s.trailStop == 0 || trail > s.trailStop {
-			s.trailStop = trail
-		}
+		s.trailStop = s.ratchetTrail(true, price, trailATR)
 		sig.StopLoss = s.trailStop
 		if price <= s.trailStop {
 			sig.Action = types.ActionCloseLong
@@ -180,10 +183,7 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 		return sig
 	}
 	if s.inShort {
-		trail := price + s.tr.ATRTrailMult*eATR[i]
-		if s.trailStop == 0 || trail < s.trailStop {
-			s.trailStop = trail
-		}
+		s.trailStop = s.ratchetTrail(false, price, trailATR)
 		sig.StopLoss = s.trailStop
 		if price >= s.trailStop {
 			sig.Action = types.ActionCloseShort
@@ -273,8 +273,12 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 	pullbackLong := bullTrend && eFast[i] > eSlow[i] && el[i] <= eFast[i] && price > eFast[i] && prevAwayLong
 	pullbackShort := bearTrend && eFast[i] < eSlow[i] && eh[i] >= eFast[i] && price < eFast[i] && prevAwayShort
 
+	// Fresh 15m crosses are the noisiest setup; MTF defaults to pullbacks only.
+	if mtf && !s.tr.LTFCrossAllowed() {
+		crossedUp = false
+		crossedDown = false
+	}
 	// Fresh crosses are noisy in mild trends: demand a stronger ADX reading.
-	// On MTF the higher TF already passed the chop gates, so skip the extra hurdle.
 	if !mtf {
 		crossADXFloor := s.tr.ADXMin + s.tr.CrossADXBonus
 		if crossedUp && tADX[j] < crossADXFloor {
@@ -287,6 +291,12 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 
 	swingLow := indicators.SwingLow(el, i, s.swingLookback)
 	swingHigh := indicators.SwingHigh(eh, i, s.swingLookback)
+	stopATRSrc := eATR[i]
+	if mtf && s.tr.HTFATREnabled() && !math.IsNaN(tATR[j]) && tATR[j] > 0 {
+		stopATRSrc = tATR[j]
+		swingLow = indicators.SwingLow(tl, j, s.swingLookback)
+		swingHigh = indicators.SwingHigh(th, j, s.swingLookback)
+	}
 
 	if bullTrend && (crossedUp || pullbackLong) {
 		if reason := s.directionBlock(true, plusDI[j], minusDI[j], tSlow, tATR, j); reason != "" {
@@ -297,12 +307,21 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			}
 			return sig
 		}
-		stopATR := price - s.tr.ATRStopMult*eATR[i]
+		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], mtf); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
+		if reason := s.barConfirmBlock(entry[i], true); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
+		stopATR := price - s.tr.ATRStopMult*stopATRSrc
 		stop := stopATR
 		if !math.IsNaN(swingLow) && swingLow < stop {
 			stop = swingLow
 		}
-		if reason := s.stopDistBlock(price, stop, tATR[j], mtf); reason != "" {
+		stop, reason := s.applyMinStop(price, stop, tATR[j], true, mtf)
+		if reason != "" {
 			sig.Reason = reason
 			return sig
 		}
@@ -327,12 +346,21 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 			}
 			return sig
 		}
-		stopATR := price + s.tr.ATRStopMult*eATR[i]
+		if reason := s.htfPullbackBlock(price, tFast[j], tATR[j], mtf); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
+		if reason := s.barConfirmBlock(entry[i], false); reason != "" {
+			sig.Reason = reason
+			return sig
+		}
+		stopATR := price + s.tr.ATRStopMult*stopATRSrc
 		stop := stopATR
 		if !math.IsNaN(swingHigh) && swingHigh > stop {
 			stop = swingHigh
 		}
-		if reason := s.stopDistBlock(price, stop, tATR[j], mtf); reason != "" {
+		stop, reason := s.applyMinStop(price, stop, tATR[j], false, mtf)
+		if reason != "" {
 			sig.Reason = reason
 			return sig
 		}
@@ -352,23 +380,108 @@ func (s *TrendFollow) evalBars(trend, entry []types.Kline, mtf bool) types.Signa
 	return sig
 }
 
-// stopDistBlock rejects entries whose stop is tighter than MinStopATR × higher-TF ATR.
-// A 15m swing can sit 5 points away while 1h noise is 15; sizing off that stop
-// blows the position up and the next 1h bar stops it out.
-func (s *TrendFollow) stopDistBlock(price, stop, trendATR float64, mtf bool) string {
+// applyMinStop floors a stop at MinStopATR × higher-TF ATR. Default is to widen
+// a tight 15m stop; explicit widen_min_stop: false still rejects the entry.
+func (s *TrendFollow) applyMinStop(price, stop, trendATR float64, long, mtf bool) (float64, string) {
 	if s.tr.MinStopATR <= 0 || trendATR <= 0 || math.IsNaN(trendATR) {
-		return ""
+		return stop, ""
 	}
 	dist := math.Abs(price - stop)
 	minDist := s.tr.MinStopATR * trendATR
 	if dist+1e-9 >= minDist {
-		return ""
+		return stop, ""
+	}
+	if s.tr.WidenMinStopEnabled() {
+		if long {
+			return price - minDist, ""
+		}
+		return price + minDist, ""
 	}
 	label := "ATR"
 	if mtf {
 		label = "1h ATR"
 	}
-	return fmt.Sprintf("stop too tight %.2f < %.2f (%.2f×%s)", dist, minDist, s.tr.MinStopATR, label)
+	return stop, fmt.Sprintf("stop too tight %.2f < %.2f (%.2f×%s)", dist, minDist, s.tr.MinStopATR, label)
+}
+
+func (s *TrendFollow) htfPullbackBlock(price, htfEMA, htfATR float64, mtf bool) string {
+	if !mtf || s.tr.PullbackHTFMaxATR <= 0 || htfATR <= 0 || math.IsNaN(htfATR) || math.IsNaN(htfEMA) {
+		return ""
+	}
+	dist := math.Abs(price - htfEMA)
+	max := s.tr.PullbackHTFMaxATR * htfATR
+	if dist > max {
+		return fmt.Sprintf("not a 1h pullback dist=%.2f > %.2f", dist, max)
+	}
+	return ""
+}
+
+func (s *TrendFollow) barConfirmBlock(bar types.Kline, long bool) string {
+	if !s.tr.BarConfirmRequired() {
+		return ""
+	}
+	rng := bar.High - bar.Low
+	if rng <= 0 {
+		return ""
+	}
+	frac := s.tr.CloseConfirmFrac
+	if frac <= 0 {
+		frac = 0.5
+	}
+	if long {
+		if bar.Close < bar.Open {
+			return "weak reclaim bar"
+		}
+		if (bar.Close-bar.Low)/rng < frac {
+			return "weak reclaim close"
+		}
+		return ""
+	}
+	if bar.Close > bar.Open {
+		return "weak reject bar"
+	}
+	if (bar.High-bar.Close)/rng < frac {
+		return "weak reject close"
+	}
+	return ""
+}
+
+// ratchetTrail only tightens. Until TrailAfterR of progress, the initial stop
+// stays put so 15m noise cannot walk a brand-new trade out.
+func (s *TrendFollow) ratchetTrail(long bool, price, atr float64) float64 {
+	current := s.trailStop
+	init := s.initStop
+	if init <= 0 {
+		init = current
+	}
+	if s.tr.TrailAfterR > 0 && s.entryPrice > 0 {
+		risk := math.Abs(s.entryPrice - init)
+		if risk > 0 {
+			progress := (price - s.entryPrice) / risk
+			if !long {
+				progress = (s.entryPrice - price) / risk
+			}
+			if progress < s.tr.TrailAfterR {
+				if current > 0 {
+					return current
+				}
+				return init
+			}
+		}
+	}
+	var candidate float64
+	if long {
+		candidate = price - s.tr.ATRTrailMult*atr
+		if current == 0 || candidate > current {
+			return candidate
+		}
+		return current
+	}
+	candidate = price + s.tr.ATRTrailMult*atr
+	if current == 0 || candidate < current {
+		return candidate
+	}
+	return current
 }
 
 func (s *TrendFollow) reentryBlock(long bool, price, edge, atr float64, bars []types.Kline) string {

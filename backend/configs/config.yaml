@@ -36,10 +36,10 @@ strategy:
     ema_slow: 60
     ema_filter: 200
     adx_period: 14
-    adx_min: 22            # ADX 低于此值视为震荡，不开新仓
-    atr_stop_mult: 1.5     # 初始止损 = max(摆动点, ATR * 倍数)
-    atr_trail_mult: 1.0    # 跟踪止损 ATR 倍数
-    chase_max_atr: 1.5     # 价格距 EMA20 超过此倍数 ATR 禁止追单
+    adx_min: 25            # ADX 低于此值视为震荡，不开新仓
+    atr_stop_mult: 1.5     # 初始止损 = max(1h 摆动点, 1h ATR * 倍数)
+    atr_trail_mult: 2.0    # 跟踪止损按 1h ATR，给趋势空间
+    chase_max_atr: 1.5     # 价格距 15m EMA20 超过此倍数 ATR 禁止追单
     use_ema200_filter: true
     # 震荡过滤：ADX 下行 / 均线纠缠 / DI 背离 / 慢线走平 时拒绝开仓
     adx_rising_bars: 2     # 要求 ADX 高于 N 根前（趋势强度仍在抬升）
@@ -47,8 +47,15 @@ strategy:
     ema_slope_bars: 5      # 慢线斜率回看根数
     ema_slope_min_atr: 0.08 # 慢线 N 根变化至少 0.08×ATR，过滤走平
     use_di_filter: true    # 多头需 +DI > −DI，空头相反
-    cross_adx_bonus: 5     # 新鲜 EMA 金叉/死叉需 ADX ≥ adx_min+5（回调入场不额外加）
-    min_stop_atr: 1.0      # 止损距至少 1.0×1h ATR，15m 止损过近则拒绝（避免仓位被放大）
+    cross_adx_bonus: 5     # 单周期新鲜 EMA 金叉/死叉需 ADX ≥ adx_min+5
+    min_stop_atr: 1.2      # 止损距至少 1.2×1h ATR；过近则拉宽（不是拒绝）
+    widen_min_stop: true
+    use_htf_atr: true      # 止损/跟踪用 1h ATR，避免 15m 噪声扫出
+    trail_after_r: 1.0     # 浮盈未到 1R 前不收紧止损
+    pullback_htf_max_atr: 0.8  # 15m 入场必须靠近 1h EMA20（真·1h 回调，不是 15m 毛刺）
+    require_bar_confirm: true  # 入场 K 线必须收在顺势一侧
+    close_confirm_frac: 0.55
+    allow_ltf_cross: false     # 关掉 15m EMA 金叉/死叉（噪声大）
     # 止损后禁止立刻在同一 EMA 再进
     reentry_atr: 0.25      # |现价−上次开仓价| 小于此×ATR 则拒绝
     reentry_cooldown: 4    # 离场后至少再等 N 根入场周期 K 线（15m）

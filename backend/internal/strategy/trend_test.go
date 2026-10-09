@@ -10,6 +10,7 @@ import (
 )
 
 func testTrendCfg() config.StrategyConfig {
+	off := false
 	return config.StrategyConfig{
 		ATRPeriod: 5, MinBars: 40,
 		Trend: config.TrendConfig{
@@ -17,6 +18,7 @@ func testTrendCfg() config.StrategyConfig {
 			ADXPeriod: 5, ADXMin: 0, // disable ADX gate for unit test
 			ATRStopMult: 1.5, ATRTrailMult: 1.0, ChaseMaxATR: 10,
 			UseEMA200Filter: false,
+			RequireBarConfirm: &off, // synthetic bars are not real reclaim candles
 		},
 	}
 }
@@ -220,20 +222,82 @@ func TestTrendRejectsImmediateReentryAfterStop(t *testing.T) {
 	}
 }
 
-func TestStopDistBlock(t *testing.T) {
+func TestMinStopWidensByDefault(t *testing.T) {
 	s := NewTrendFollow("ETHUSDT", testTrendCfg())
 	s.tr.MinStopATR = 1.0
-	if got := s.stopDistBlock(2700, 2695, 10, true); got == "" {
-		t.Fatal("expected 5-pt stop to fail vs 10-pt 1h ATR")
-	} else if !strings.Contains(got, "stop too tight") || !strings.Contains(got, "1h ATR") {
-		t.Fatalf("got %q", got)
+	got, reason := s.applyMinStop(2700, 2695, 10, true, true)
+	if reason != "" {
+		t.Fatalf("widen must not reject, got %q", reason)
 	}
-	if got := s.stopDistBlock(2700, 2685, 10, true); got != "" {
-		t.Fatalf("15-pt stop should pass vs 10-pt ATR, got %q", got)
+	if got != 2690 {
+		t.Fatalf("tight 5-pt stop should widen to 10-pt, got %v", got)
+	}
+	got, reason = s.applyMinStop(2700, 2685, 10, true, true)
+	if reason != "" || got != 2685 {
+		t.Fatalf("15-pt stop should stay, got %v %q", got, reason)
+	}
+}
+
+func TestMinStopRejectsWhenWidenOff(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.MinStopATR = 1.0
+	off := false
+	s.tr.WidenMinStop = &off
+	_, reason := s.applyMinStop(2700, 2695, 10, true, true)
+	if reason == "" || !strings.Contains(reason, "stop too tight") || !strings.Contains(reason, "1h ATR") {
+		t.Fatalf("got %q", reason)
 	}
 	s.tr.MinStopATR = 0
-	if got := s.stopDistBlock(2700, 2695, 10, true); got != "" {
-		t.Fatalf("disabled min stop must pass, got %q", got)
+	if _, reason := s.applyMinStop(2700, 2695, 10, true, true); reason != "" {
+		t.Fatalf("disabled min stop must pass, got %q", reason)
+	}
+}
+
+func TestHTFPullbackBlock(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.PullbackHTFMaxATR = 0.8
+	if got := s.htfPullbackBlock(200, 100, 10, true); got == "" {
+		t.Fatal("price 10 ATR from 1h EMA20 must be rejected")
+	}
+	if got := s.htfPullbackBlock(105, 100, 10, true); got != "" {
+		t.Fatalf("0.5 ATR pullback should pass, got %q", got)
+	}
+	if got := s.htfPullbackBlock(200, 100, 10, false); got != "" {
+		t.Fatalf("single-TF must skip the 1h proximity gate, got %q", got)
+	}
+}
+
+func TestBarConfirmBlock(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	on := true
+	s.tr.RequireBarConfirm = &on
+	s.tr.CloseConfirmFrac = 0.55
+	weak := types.Kline{Open: 100, High: 101, Low: 90, Close: 99.5} // red, close near high of a dump
+	if got := s.barConfirmBlock(weak, true); got == "" {
+		t.Fatal("red reclaim bar must be rejected")
+	}
+	strong := types.Kline{Open: 100, High: 110, Low: 99, Close: 109}
+	if got := s.barConfirmBlock(strong, true); got != "" {
+		t.Fatalf("bullish close should pass, got %q", got)
+	}
+	weakShort := types.Kline{Open: 100, High: 110, Low: 99, Close: 109}
+	if got := s.barConfirmBlock(weakShort, false); got == "" {
+		t.Fatal("green bar must not confirm a short")
+	}
+}
+
+func TestTrailWaitsForR(t *testing.T) {
+	s := NewTrendFollow("ETHUSDT", testTrendCfg())
+	s.tr.TrailAfterR = 1.0
+	s.tr.ATRTrailMult = 1.0
+	s.entryPrice = 100
+	s.initStop = 90
+	s.trailStop = 90
+	if got := s.ratchetTrail(true, 105, 5); got != 90 {
+		t.Fatalf("0.5R must keep initial stop, got %v", got)
+	}
+	if got := s.ratchetTrail(true, 112, 5); got != 107 {
+		t.Fatalf("1.2R should trail to 112-5=107, got %v", got)
 	}
 }
 

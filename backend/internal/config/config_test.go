@@ -26,8 +26,26 @@ func TestLoadShippedConfig(t *testing.T) {
 	if cfg.Strategy.Trend.EMASepMinATR != 1.0 {
 		t.Fatalf("ema_sep_min_atr = %v, want 1.0", cfg.Strategy.Trend.EMASepMinATR)
 	}
-	if cfg.Strategy.Trend.MinStopATR != 1.0 {
-		t.Fatalf("min_stop_atr = %v, want 1.0", cfg.Strategy.Trend.MinStopATR)
+	if cfg.Strategy.Trend.ADXMin != 25 {
+		t.Fatalf("adx_min = %v, want 25", cfg.Strategy.Trend.ADXMin)
+	}
+	if cfg.Strategy.Trend.ATRTrailMult != 2.0 {
+		t.Fatalf("atr_trail_mult = %v, want 2.0", cfg.Strategy.Trend.ATRTrailMult)
+	}
+	if cfg.Strategy.Trend.MinStopATR != 1.2 {
+		t.Fatalf("min_stop_atr = %v, want 1.2", cfg.Strategy.Trend.MinStopATR)
+	}
+	if cfg.Strategy.Trend.TrailAfterR != 1.0 {
+		t.Fatalf("trail_after_r = %v, want 1.0", cfg.Strategy.Trend.TrailAfterR)
+	}
+	if cfg.Strategy.Trend.PullbackHTFMaxATR != 0.8 {
+		t.Fatalf("pullback_htf_max_atr = %v, want 0.8", cfg.Strategy.Trend.PullbackHTFMaxATR)
+	}
+	if !cfg.Strategy.Trend.HTFATREnabled() || !cfg.Strategy.Trend.WidenMinStopEnabled() || !cfg.Strategy.Trend.BarConfirmRequired() {
+		t.Fatal("htf atr / widen stop / bar confirm should be enabled")
+	}
+	if cfg.Strategy.Trend.LTFCrossAllowed() {
+		t.Fatal("15m EMA crosses should stay off")
 	}
 	if !cfg.Strategy.Trend.UseDIFilter {
 		t.Fatal("use_di_filter should be enabled")
@@ -98,6 +116,12 @@ func TestFiltersDefaultOn(t *testing.T) {
 	tr := TrendConfig{}
 	if !tr.EMA20SideRequired() || !tr.ReentryHTFResetRequired() || !tr.ResetRequired() {
 		t.Fatal("omitted trend invalidation keys must default to enabled")
+	}
+	if !tr.HTFATREnabled() || !tr.WidenMinStopEnabled() || !tr.BarConfirmRequired() {
+		t.Fatal("omitted trend quality keys must default to enabled")
+	}
+	if tr.LTFCrossAllowed() {
+		t.Fatal("omitted allow_ltf_cross must default to disabled")
 	}
 	tr.RequireEMA20Side = &off
 	if tr.EMA20SideRequired() {

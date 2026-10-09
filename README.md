@@ -51,4 +51,4 @@ npm run dev
 | 交易记录 | SQLite `trades` |
 | 日志列表 | SQLite `app_logs` |
 
-详见 `backend/README.md`、`frontend/README.md`。
+详见 `docs/strategy.md`、`backend/README.md`、`frontend/README.md`。

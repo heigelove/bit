@@ -6,7 +6,7 @@
 
 | 名称 | 配置值 | 实现 | 用途 |
 |------|--------|------|------|
-| 趋势回调 | `trend` / `trend_follow` | `TrendFollow` | 1h 定方向，15m 回调进场，ATR 跟踪止损 |
+| 趋势回调 | `trend` / `trend_follow` | `TrendFollow` | 1h 定方向，15m 在 1h EMA 附近回调进场，1h ATR 止损与跟踪 |
 | 压缩突破 | `squeeze` / `squeeze_breakout` | `SqueezeBreakout` | 主周期 Donchian 突破，只在波动压缩后开仓 |
 
 共用：`atr_period: 14`，`min_bars: 220`（squeeze 还会按指标预热再抬高下限）。
@@ -43,10 +43,10 @@
 
 | 周期 | 配置 | 职责 |
 |------|------|------|
-| 主周期 | `timeframes.primary: 1h` | EMA20/60/200、ADX/DMI、均线间距与斜率、趋势翻转离场、1h 收盘丢 EMA20 离场 |
-| 入场周期 | `timeframes.entry: 15m` | 回调触及 / 金叉死叉、距 EMA20 的追价限制、初始止损与 ATR 跟踪 |
+| 主周期 | `timeframes.primary: 1h` | 方向、震荡门、EMA200、DI/斜率、初始止损与跟踪（1h ATR / 1h 摆动点）、趋势翻转 / 收盘丢 EMA20 离场 |
+| 入场周期 | `timeframes.entry: 15m` | 时机：触及 15m EMA20 后收回；必须同时靠近 1h EMA20 |
 
-未配置入场周期（或与主周期相同）时，上述全部落在主周期上。单周期下，新鲜 EMA 交叉还要求 ADX ≥ `adx_min + cross_adx_bonus`（默认 27）；多周期时主周期已经过震荡门，交叉不再额外加 ADX。
+未配置入场周期（或与主周期相同）时，上述全部落在主周期上。单周期下仍允许新鲜 EMA 交叉，且要求 ADX ≥ `adx_min + cross_adx_bonus`（当前 30）。多周期默认 **关掉** 15m 金叉/死叉（`allow_ltf_cross: false`），只做回调：15m 交叉噪声大，回测里几乎全是亏单。
 
 ### 多空判定（1h）
 
@@ -56,13 +56,13 @@
 
 ### 开仓
 
-必须先通过 1h 震荡过滤，再出现 15m 形态之一：
+必须先通过 1h 震荡过滤，再出现合格的 15m 回调（默认不做 15m 交叉）：
 
 **震荡过滤（`chopBlock`，做在 1h 上）**
 
-| 条件 | 默认 | 拒绝原因（多周期带 `1h ` 前缀） |
+| 条件 | 当前 | 拒绝原因（多周期带 `1h ` 前缀） |
 |------|------|--------------------------------|
-| ADX < `adx_min` | 22 | `ADX … chop` |
+| ADX < `adx_min` | 25 | `ADX … chop` |
 | ADX 不高于 `adx_rising_bars` 根之前 | 2 | `ADX falling … chop` |
 | \|EMA20−EMA60\| < `ema_sep_min_atr` × 1h ATR | 1.0 | `EMA tangled …` |
 
@@ -83,22 +83,25 @@ EMA20/60 还没交叉时，1h 看起来仍是多头，但新下跌已经开始�
 
 **15m 形态（必须处于对应 1h 趋势中）**
 
-1. **回调续势（主路径）**  
-   多头：15m EMA20 > EMA60；上一根最低价仍在 EMA20 上方；本根最低价触及或跌破 EMA20；本根收盘重新站上 EMA20。  
-   空头对称（最高价触及后收盘跌回均线下方）。  
+1. **回调续势（唯一默认路径）**  
+   多头：15m EMA20 > EMA60；上一根最低价仍在 15m EMA20 上方；本根最低价触及或跌破 15m EMA20；本根收盘重新站上。  
+   空头对称。  
    「上一根必须离开均线」避免止损后价格贴着均线反复开仓。
-2. **EMA 交叉**：15m EMA20 上穿/下穿 EMA60，且 1h 方向一致。
+2. **EMA 交叉**：默认关闭。打开 `allow_ltf_cross: true` 后，15m EMA20 上穿/下穿 EMA60 且 1h 方向一致才可进。单周期模式仍走交叉 + `cross_adx_bonus`。
 
-**其它拒绝**
+只碰到 15m EMA20 **不够**。那是局部均线，1h 趋势里价格可以远离 1h EMA20 很远，15m 一次回踩就会当成「回调」——回测里大量 1–2 小时扫损来自这里。
 
-- 现价距 15m EMA20 > `chase_max_atr` × 15m ATR（默认 1.5）→ `too far from EMA20, no chase`。
-- 止损距离 < `min_stop_atr` × **1h ATR**（默认 1.0）→ `stop too tight`。15m 止损过近会把仓位放大，且扛不住 1h 噪声；这里是拒绝，不是把止损放宽（放宽后 15m 跟踪仍会立刻收紧）。
+**质量门（针对「假回调」）**
+
+- `pullback_htf_max_atr`（0.8）：现价距 **1h EMA20** 必须 ≤ 0.8 × 1h ATR，否则 `not a 1h pullback`。这才是 1h 趋势里的回调，而不是 15m 毛刺。
+- `require_bar_confirm`（默认开）：入场 K 线必须顺势收盘。多头收阳且收盘位于 K 线区间上 `close_confirm_frac`（0.55）；空头对称。弱收回 → `weak reclaim bar/close`。
+- 现价距 15m EMA20 > `chase_max_atr` × 15m ATR（1.5）→ `too far from EMA20, no chase`。
 - 再入场锁未解除（见下文）。
 
 ```mermaid
 flowchart TD
   A[已收盘 15m / 对齐后的 1h] --> B{持仓?}
-  B -->|多/空| C[15m ATR 跟踪]
+  B -->|多/空| C[1h ATR 跟踪，未到 1R 不收紧]
   C --> D{触及跟踪 / 1h 均线反叉 / 1h 收盘丢 EMA20?}
   D -->|是| E[平仓并锁再入场]
   D -->|否| F[HOLD + 更新止损]
@@ -106,24 +109,34 @@ flowchart TD
   G -->|拦截| H[NONE]
   G -->|通过| I{1h 仍多但收盘或现价丢 EMA20?}
   I -->|是| H
-  I -->|否| J{15m 回调收回或均线交叉?}
+  I -->|否| J{15m 回调收回 且靠近 1h EMA20?}
   J -->|否| H
-  J -->|是| K{DI / 慢线斜率 / 止损距离 / 再入场}
+  J -->|是| K{顺势收盘 / DI / 慢线斜率 / 再入场}
   K -->|拦截| H
-  K -->|通过| L[OPEN]
+  K -->|通过| L[OPEN，止损按 1h ATR]
 ```
 
 ### 止损与持仓
 
-初始止损（多）：`min(现价 − atr_stop_mult × 15m ATR, 近 10 根 15m 摆动低点)`。空头用摆动高点，取更远的那一侧。`atr_stop_mult` 默认 1.5。
+`use_htf_atr` 默认开启：多周期时止损和跟踪都按 **1h ATR / 近 10 根 1h 摆动点**，不用 15m ATR。15m 波动远小于 1h 噪声，用它做止损会把仓位放大，下一根 1h 阴线就扫出。
 
-持仓后只向有利方向收紧：
+初始止损（多）：
 
-- 跟踪：`atr_trail_mult` × 15m ATR（默认 1.0）。实盘由引擎把该价挂成 STOP_MARKET，只收紧不放宽。
+```
+stop = min(现价 − atr_stop_mult × 1h ATR, 近 10 根 1h 摆动低点)
+若距离 < min_stop_atr × 1h ATR：拉宽到该距离（widen_min_stop，默认开）
+```
+
+空头对称。当前 `atr_stop_mult: 1.5`，`min_stop_atr: 1.2`。`widen_min_stop: false` 时改回拒绝（`stop too tight`）。
+
+持仓后：
+
+- **未到 `trail_after_r`（1.0R）之前不收紧**，止损停在开仓位，避免 15m 噪声把新单走出。
+- 达到 1R 后按 `atr_trail_mult` × 1h ATR（2.0）只向有利方向收。实盘由引擎挂 STOP_MARKET，只收紧不放宽。
 - 1h EMA20/60 反叉：`ema cross down` / `ema cross up`。
 - 1h 收盘失去 EMA20（多）或重新站上（空）。
 
-策略给出 `CLOSE_*` 时引擎市价平仓；交易所条件单先成交时，引擎按仓位消失记账，并在后续从币安成交同步真实 `realizedPnl`。
+策略给出 `CLOSE_*` 时引擎市价平仓；交易所条件单先成交时，引擎按仓位消失记账，并在后续从币安成交同步真实 `realizedPnl`。标记价已经穿过止损时，引擎不再挂条件单，改为市价平仓。
 
 ### 再入场锁
 
@@ -141,20 +154,25 @@ flowchart TD
 | 键 | 值 | 作用 |
 |----|----|------|
 | `ema_fast` / `ema_slow` / `ema_filter` | 20 / 60 / 200 | 趋势栈与 EMA200 过滤 |
-| `adx_period` / `adx_min` | 14 / 22 | 强度下限 |
+| `adx_period` / `adx_min` | 14 / 25 | 强度下限 |
 | `adx_rising_bars` | 2 | ADX 仍在抬升 |
 | `ema_sep_min_atr` | 1.0 | 均线间距，挡弱反抽 |
 | `ema_slope_bars` / `ema_slope_min_atr` | 5 / 0.08 | 慢线不能走平 |
 | `use_di_filter` | true | +DI / −DI 与方向一致 |
 | `cross_adx_bonus` | 5 | 仅单周期交叉 |
-| `atr_stop_mult` / `atr_trail_mult` | 1.5 / 1.0 | 初始止损与跟踪 |
-| `chase_max_atr` | 1.5 | 禁止远离 EMA20 追价 |
-| `min_stop_atr` | 1.0 | 止损至少 1×1h ATR |
+| `allow_ltf_cross` | false | 多周期不做 15m 金叉/死叉 |
+| `pullback_htf_max_atr` | 0.8 | 入场必须靠近 1h EMA20 |
+| `require_bar_confirm` / `close_confirm_frac` | true / 0.55 | 入场 K 线顺势收盘 |
+| `atr_stop_mult` / `atr_trail_mult` | 1.5 / 2.0 | 初始止损与跟踪（按 1h ATR） |
+| `use_htf_atr` | true | 止损/跟踪/摆动点用 1h |
+| `trail_after_r` | 1.0 | 浮盈未到 1R 不收紧 |
+| `chase_max_atr` | 1.5 | 禁止远离 15m EMA20 追价 |
+| `min_stop_atr` / `widen_min_stop` | 1.2 / true | 过近则拉宽到 1.2×1h ATR |
 | `use_ema200_filter` | true | 价格与 1h 收盘相对 EMA200 |
 | `require_ema20_side` | true | 丢失快线则方向失效 |
 | `reentry_*` / `require_reset` / `reentry_htf_reset` | 见上 | 止损后再入场 |
 
-`require_reset`、`reentry_htf_reset`、`require_ema20_side` 省略时默认开启；要关掉必须在 yaml 里写成 `false`。震荡类数值门（ADX 抬升、均线间距、斜率、`min_stop_atr`）为 `0` 表示关闭。
+省略时默认开启：`require_reset`、`reentry_htf_reset`、`require_ema20_side`、`use_htf_atr`、`widen_min_stop`、`require_bar_confirm`。要关掉必须写成 `false`。`allow_ltf_cross` 省略则为关。数值门（ADX 抬升、均线间距、斜率、`min_stop_atr`、`pullback_htf_max_atr`、`trail_after_r`）为 `0` 表示关闭。
 
 ---
 
@@ -222,7 +240,7 @@ qty = (权益 × risk_per_trade) / |入场价 − 止损|
 qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 ```
 
-当前：单笔风险 0.75% 权益，名义价值不超过权益×杠杆的 70%。止损越近单子越大，因此趋势策略用 `min_stop_atr` 先拒绝过近止损，而不是只靠名义上限硬切。
+当前：单笔风险 0.75% 权益，名义价值不超过权益×杠杆的 70%。止损越近单子越大。趋势策略默认把过近止损 **拉宽** 到 `min_stop_atr` × 1h ATR（`widen_min_stop`），既限制仓位也不把 15m 噪声当止损。设成 `false` 则改回拒绝开仓。
 
 熔断（命中后本进程不再开仓，状态进 Redis）：
 
@@ -245,11 +263,13 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `warmup` / `waiting closed bar` / `indicator NaN` | 数据不足 |
 | `1h ADX … chop` / `1h EMA tangled` / `1h ADX falling` | 1h 震荡 |
 | `close lost 1h EMA20` / `price below 1h EMA20` | 方向失效，禁止新多 |
-| `too far from EMA20, no chase` | 离均线过远 |
-| `stop too tight` | 止损小于 1h ATR 门槛 |
+| `too far from EMA20, no chase` | 离 15m EMA20 过远 |
+| `not a 1h pullback dist=…` | 离 1h EMA20 太远，不是趋势回调 |
+| `weak reclaim/reject bar` / `weak reclaim/reject close` | 入场 K 线未顺势收盘 |
+| `stop too tight` | 止损过近且 `widen_min_stop: false` |
 | `waiting setup reset after exit` / `reentry cooldown` / `same level as last exit` | 再入场锁 |
 | `15m pullback to EMA20 reclaim/reject` | 回调进场 |
-| `15m EMA cross up/down + 1h trend` | 交叉进场 |
+| `15m EMA cross up/down + 1h trend` | 交叉进场（需打开 `allow_ltf_cross`） |
 | `hold long/short` | 持仓，止损已更新 |
 | `trail stop hit` / `ema cross down` | 离场 |
 
