@@ -313,7 +313,10 @@ type VegasConfig struct {
 	// Interval is the candle size this strategy trades. Empty becomes 4h:
 	// on ETHUSDT the 1h tunnel tags too late, and that win rate did not hold
 	// up on a later slice of history. Trend and squeeze ignore this field.
-	Interval      string `yaml:"interval"`
+	Interval string `yaml:"interval"`
+	// EntryMode is "pullback" (already outside, dip back to the tunnel) or
+	// "breakout" (close through the tunnel from the other side). Empty is pullback.
+	EntryMode     string `yaml:"entry_mode"`
 	EMAFast       int    `yaml:"ema_fast"`        // momentum filter, classically 12
 	EMATunnelFast int    `yaml:"ema_tunnel_fast"` // tunnel, classically 144
 	EMATunnelSlow int    `yaml:"ema_tunnel_slow"` // tunnel, classically 169
@@ -369,6 +372,12 @@ type VegasConfig struct {
 func (v VegasConfig) WithDefaults() VegasConfig {
 	if strings.TrimSpace(v.Interval) == "" {
 		v.Interval = "4h"
+	}
+	switch strings.ToLower(strings.TrimSpace(v.EntryMode)) {
+	case "", "pullback":
+		v.EntryMode = "pullback"
+	case "breakout":
+		v.EntryMode = "breakout"
 	}
 	if v.EMAFast <= 0 {
 		v.EMAFast = 12
@@ -434,6 +443,10 @@ func (v VegasConfig) WithDefaults() VegasConfig {
 		v.TimeStopMinR = 0.5
 	}
 	return v
+}
+
+func (v VegasConfig) BreakoutEntry() bool {
+	return strings.EqualFold(strings.TrimSpace(v.EntryMode), "breakout")
 }
 
 func (v VegasConfig) TPEnabled() bool {
@@ -657,6 +670,11 @@ func (c *Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("strategy.name %q must be trend, squeeze, or vegas", c.Strategy.Name)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Strategy.Vegas.EntryMode)) {
+	case "", "pullback", "breakout":
+	default:
+		return fmt.Errorf("strategy.vegas.entry_mode %q must be pullback or breakout", c.Strategy.Vegas.EntryMode)
 	}
 	if c.Risk.MaxNotionalPct > 1 {
 		return fmt.Errorf("risk.max_notional_pct must be <= 1")

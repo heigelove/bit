@@ -105,6 +105,7 @@ strategy:
   # 只做通道刚排好后的回踩，拿住单边，直到 144/169 再次交叉。不设固定止盈。
   vegas:
     interval: "4h"           # 1h 回踩胜率在后一段行情里站不住，4h 才是这套参数的周期
+    entry_mode: breakout     # pullback = 已在通道外再回踩 | breakout = 从通道另一侧穿出
     ema_fast: 12             # 动量过滤
     ema_tunnel_fast: 144     # 通道上沿/下沿的一条
     ema_tunnel_slow: 169     # 通道另一条

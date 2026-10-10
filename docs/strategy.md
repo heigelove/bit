@@ -231,17 +231,27 @@ stop = min(现价 − atr_stop_mult × 1h ATR, 近 10 根 1h 摆动低点)
 
 文件：`backend/internal/strategy/vegas.go`。只用 `strategy.vegas.interval`（默认 **4h**），不用 15m。
 
-通道是 EMA144 与 EMA169，近端是离价格更近的那一条。EMA12 用来确认动量还在通道的趋势一侧。做的是**已经站在通道外之后的回踩**，不是从通道另一侧穿出来的突破。
+通道是 EMA144 与 EMA169，近端是离价格更近的那一条。EMA12 用来确认动量还在通道的趋势一侧。入场由 `entry_mode` 选择，默认 `pullback`。
 
 ### 开仓
 
-多头要同时满足（空头对称）：
+两种入场共用这些过滤（多头；空头对称）：
 
 1. **排列**：EMA144 > EMA169，且 EMA169 在 `slope_bars` 内的升幅 ≥ `slope_min_atr` × ATR。
 2. **动量**：EMA12 在通道近端之外。ADX ≥ `adx_min`（25；写成 0 则不看 ADX）。
-3. **先有趋势**：回踩之前 `establish_bars` 根里，有收盘站在通道外。通道内第一次收上去不算。
-4. **回踩**：当根或上一根的影线碰到近端（允许 `touch_atr` × ATR 的距离），且回踩收盘没有打穿远端超过 `pierce_max_atr` × ATR。
-5. **确认**：这一根收盘重新离开近端至少 `reclaim_min_atr` × ATR，K 线顺势，收盘落在这根振幅靠趋势一侧至少 `close_confirm_frac`（0.55）的位置，而且离近端不超过 `chase_max_atr` × ATR。上一根已经满足同样条件则不再开，避免同一脚回踩连续进。
+3. **确认 K 线**：收盘离开近端至少 `reclaim_min_atr` × ATR，K 线顺势，收盘落在这根振幅靠趋势一侧至少 `close_confirm_frac`（0.55）的位置，而且离近端不超过 `chase_max_atr` × ATR。上一根已经满足同样条件则不再开。
+
+`entry_mode: pullback`（默认）是已经站在通道外之后的回踩：
+
+- `establish_bars` 根内必须先有收盘站在通道外。从另一侧第一次穿出来不算。
+- 当根或上一根的影线碰到近端（允许 `touch_atr` × ATR），回踩收盘没有打穿远端超过 `pierce_max_atr` × ATR。
+
+`entry_mode: breakout` 是从通道另一侧穿出来：
+
+- 上一根收盘还在通道内或另一侧，这一根才收到趋势一侧。
+- `establish_bars` 根内要有收盘在通道的另一侧。已经在外面的行情不会被当成突破。
+
+`max_stack_age: 120` 只接排列形成后大约 20 天（4h）里的信号。更晚的多半是单边末端，不再开。
 
 `max_stack_age: 120` 只接排列形成后大约 20 天（4h）里的回踩。更晚的回踩多半是单边末端，不再开。
 
@@ -344,7 +354,9 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `no pullback to tunnel` / `pullback broke the tunnel` | 没碰到通道，或回踩收盘打穿了 |
 | `too far from tunnel, no chase` | 确认根离通道太远 |
 | `weak reclaim bar` / `weak reclaim close` | 确认 K 线不顺势 |
-| `vegas pullback reclaim/reject` | 开多 / 开空 |
+| `vegas pullback reclaim/reject` | 回踩开多 / 开空 |
+| `vegas tunnel breakout/breakdown` | 从另一侧穿出开多 / 开空 |
+| `not a breakout from the other side` / `already outside tunnel` | 不是从另一侧穿出的新鲜突破 |
 | `tunnel stack flipped` | 144/169 反向交叉，单边结束 |
 | `tp …R` / `trail stop … hit` | 固定止盈（默认关）或宽跟踪打到 |
 | `pullback already traded` | 上一根已经是同一脚回踩 |

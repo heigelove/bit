@@ -183,6 +183,57 @@ func TestVegasIgnoresFreshCross(t *testing.T) {
 	}
 }
 
+func TestVegasBreakoutFromOtherSide(t *testing.T) {
+	cfg := vegasTestCfg()
+	off := false
+	cfg.Vegas.EntryMode = "breakout"
+	cfg.Vegas.RequireStack = &off
+	cfg.Vegas.SlopeMinATR = 0.0001
+	cfg.Vegas.ChaseMaxATR = 30
+
+	// Rise so the slow tunnel is still pointing up, then sink through it
+	// and close back out the top. That is a cross from the other side.
+	bars := risingBars(60, 100, 1.2)
+	for n := 0; n < 3; n++ {
+		_, _, _, _, lower, atr := vegasEnds(bars, 3, 8, 13)
+		last := bars[len(bars)-1]
+		px := lower - math.Max(atr, 1)
+		bars = append(bars, vegasBar(len(bars), last.Close, math.Max(last.Close, px), px-atr*0.2, px))
+	}
+	_, _, _, upper, _, atr := vegasEnds(bars, 3, 8, 13)
+	last := bars[len(bars)-1]
+	if last.Close >= upper {
+		t.Fatalf("setup: close %.2f should still be under the tunnel %.2f", last.Close, upper)
+	}
+	px := upper + math.Max(atr*0.4, 0.5)
+	bars = append(bars, vegasBar(len(bars), last.Close, px+atr*0.2, math.Min(last.Close, upper), px))
+
+	s := NewVegasTunnel("ETHUSDT", cfg)
+	s.vg.SlopeMinATR = 0
+	sig := s.Evaluate(bars, MarketContext{})
+	if sig.Action != types.ActionOpenLong {
+		t.Fatalf("breakout through the tunnel should open long, got %s (%s)", sig.Action, sig.Reason)
+	}
+	if !strings.Contains(sig.Reason, "breakout") {
+		t.Fatalf("reason %q", sig.Reason)
+	}
+
+	pull := vegasTestCfg()
+	pull.Vegas.RequireStack = &off
+	pull.Vegas.SlopeMinATR = 0.0001
+	pull.Vegas.ChaseMaxATR = 30
+	sig = NewVegasTunnel("ETHUSDT", pull).Evaluate(bars, MarketContext{})
+	if sig.Action == types.ActionOpenLong {
+		t.Fatalf("pullback mode must ignore a cross from the other side: %s", sig.Reason)
+	}
+
+	// A market that has been riding above the tunnel is not a fresh breakout.
+	sig = NewVegasTunnel("ETHUSDT", cfg).Evaluate(risingBars(55, 100, 1.2), MarketContext{})
+	if sig.Action == types.ActionOpenLong {
+		t.Fatalf("price already outside is not a breakout: %s", sig.Reason)
+	}
+}
+
 func TestVegasRejectsChase(t *testing.T) {
 	cfg := vegasTestCfg()
 	cfg.Vegas.ChaseMaxATR = 0.05

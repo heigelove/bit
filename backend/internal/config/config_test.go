@@ -122,6 +122,9 @@ func TestLoadShippedConfig(t *testing.T) {
 	if vg.Interval != "4h" {
 		t.Fatalf("vegas.interval = %q, want 4h", vg.Interval)
 	}
+	if vg.EntryMode != "pullback" || vg.BreakoutEntry() {
+		t.Fatalf("vegas.entry_mode = %q", vg.EntryMode)
+	}
 	if vg.EMAFast != 12 || vg.EMATunnelFast != 144 || vg.EMATunnelSlow != 169 {
 		t.Fatalf("vegas periods = %d/%d/%d", vg.EMAFast, vg.EMATunnelFast, vg.EMATunnelSlow)
 	}

@@ -10,14 +10,14 @@ import (
 	"github.com/work/bit/internal/types"
 )
 
-// VegasTunnel trades pullbacks to the Vegas tunnel (EMA 144 / EMA 169).
-// EMA 12 is the momentum filter. The tunnel is support in an uptrend and
-// resistance in a downtrend; the strategy fades a tag of the near edge only
-// after price has already been holding on the trend side of it.
+// VegasTunnel trades the EMA 144 / EMA 169 tunnel. EMA 12 is the momentum
+// filter. The tunnel is support in an uptrend and resistance in a downtrend.
 //
-// Breakouts through the tunnel are ignored. A position is held for the
-// one-sided leg: no fixed target. It ends when EMA144 crosses back through
-// EMA169, or a wide trail gives back the extension.
+// EntryMode selects the trigger. "pullback" buys a dip that is already
+// outside the tunnel. "breakout" buys the close that comes through from
+// the other side. A position is held for the one-sided leg: no fixed
+// target. It ends when EMA144 crosses back through EMA169, or a wide
+// trail gives back the extension.
 //
 // Primary timeframe only. The 15m entry stream is not used.
 type VegasTunnel struct {
@@ -255,18 +255,22 @@ func (s *VegasTunnel) entry(sig types.Signal, v vegasView, i int) types.Signal {
 
 	longOK, longWhy := s.qualifies(v, i, true)
 	shortOK, shortWhy := s.qualifies(v, i, false)
-	// One signal per pullback. The previous bar qualifying means this one is
+	// One signal per setup. The previous bar qualifying means this one is
 	// the bar after the entry, not a new setup.
+	dup := "pullback already traded"
+	if s.vg.BreakoutEntry() {
+		dup = "breakout already traded"
+	}
 	if longOK {
 		if prev, _ := s.qualifies(v, i-1, true); prev {
 			longOK = false
-			longWhy = "pullback already traded"
+			longWhy = dup
 		}
 	}
 	if shortOK {
 		if prev, _ := s.qualifies(v, i-1, false); prev {
 			shortOK = false
-			shortWhy = "pullback already traded"
+			shortWhy = dup
 		}
 	}
 	if longOK == shortOK {
@@ -306,9 +310,16 @@ func (s *VegasTunnel) entry(sig types.Signal, v vegasView, i int) types.Signal {
 		sig.Action = types.ActionOpenShort
 	}
 	sig.StopLoss = stop
-	sig.Reason = "vegas pullback reclaim"
-	if !long {
-		sig.Reason = "vegas pullback reject"
+	if s.vg.BreakoutEntry() {
+		sig.Reason = "vegas tunnel breakout"
+		if !long {
+			sig.Reason = "vegas tunnel breakdown"
+		}
+	} else {
+		sig.Reason = "vegas pullback reclaim"
+		if !long {
+			sig.Reason = "vegas pullback reject"
+		}
 	}
 	s.lock.NoteEntry(long, sig.Price, edge)
 	return sig
@@ -416,6 +427,9 @@ func (s *VegasTunnel) qualifies(v vegasView, i int, long bool) (bool, string) {
 			return false, "no lower high"
 		}
 	}
+	if s.vg.BreakoutEntry() {
+		return s.crossedFromOtherSide(v, i, long)
+	}
 	if !s.touched(v, i, long) && !s.touched(v, i-1, long) {
 		return false, "no pullback to tunnel"
 	}
@@ -453,6 +467,38 @@ func (s *VegasTunnel) pierced(v vegasView, i int, long bool) bool {
 		return v.closes[i] < lower-room
 	}
 	return v.closes[i] > upper+room
+}
+
+// crossedFromOtherSide is the breakout entry: this bar is the first close
+// beyond the tunnel, and a recent close was still on the other side.
+func (s *VegasTunnel) crossedFromOtherSide(v vegasView, i int, long bool) (bool, string) {
+	if i < 1 || math.IsNaN(v.tunF[i-1]) || math.IsNaN(v.tunS[i-1]) {
+		return false, "warmup"
+	}
+	prevUp, prevLo := tunnelBands(v.tunF[i-1], v.tunS[i-1])
+	if long && v.closes[i-1] > prevUp {
+		return false, "already outside tunnel"
+	}
+	if !long && v.closes[i-1] < prevLo {
+		return false, "already outside tunnel"
+	}
+	limit := i - s.vg.EstablishBars
+	if limit < 0 {
+		limit = 0
+	}
+	for k := i - 1; k >= limit; k-- {
+		if math.IsNaN(v.tunF[k]) || math.IsNaN(v.tunS[k]) {
+			continue
+		}
+		up, lo := tunnelBands(v.tunF[k], v.tunS[k])
+		if long && v.closes[k] < lo {
+			return true, ""
+		}
+		if !long && v.closes[k] > up {
+			return true, ""
+		}
+	}
+	return false, "not a breakout from the other side"
 }
 
 // heldBefore requires the pullback to start from a close already beyond the
