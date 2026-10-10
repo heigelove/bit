@@ -354,7 +354,7 @@ func TestSqueezeAllowsReentryAtNewLevel(t *testing.T) {
 }
 
 func TestStrategyFactory(t *testing.T) {
-	for _, name := range []string{"", "trend", "squeeze"} {
+	for _, name := range []string{"", "trend", "squeeze", "vegas"} {
 		s, err := New(name, "ETHUSDT", config.StrategyConfig{
 			ATRPeriod: 14, MinBars: 220,
 			Trend: config.TrendConfig{EMAFast: 20, EMASlow: 60, EMAFilter: 200, ADXPeriod: 14},

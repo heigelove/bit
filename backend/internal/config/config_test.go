@@ -118,6 +118,34 @@ func TestLoadShippedConfig(t *testing.T) {
 	if !sq.ResetRequired() {
 		t.Fatal("squeeze require_reset should be enabled")
 	}
+	vg := cfg.Strategy.Vegas
+	if vg.Interval != "4h" {
+		t.Fatalf("vegas.interval = %q, want 4h", vg.Interval)
+	}
+	if vg.EMAFast != 12 || vg.EMATunnelFast != 144 || vg.EMATunnelSlow != 169 {
+		t.Fatalf("vegas periods = %d/%d/%d", vg.EMAFast, vg.EMATunnelFast, vg.EMATunnelSlow)
+	}
+	if vg.ADXMin != 25 {
+		t.Fatalf("vegas.adx_min = %v, want 25", vg.ADXMin)
+	}
+	if vg.TouchATR != 0.8 || vg.ChaseMaxATR != 2.5 {
+		t.Fatalf("vegas touch/chase = %v/%v", vg.TouchATR, vg.ChaseMaxATR)
+	}
+	if vg.TPEnabled() {
+		t.Fatal("vegas fixed target should stay off so the trend leg is held")
+	}
+	if vg.MaxStackAge != 120 {
+		t.Fatalf("vegas.max_stack_age = %d, want 120", vg.MaxStackAge)
+	}
+	if vg.ATRTrailMult != 8 || vg.TrailAfterR != 3 {
+		t.Fatalf("vegas trail = %v after %v", vg.ATRTrailMult, vg.TrailAfterR)
+	}
+	if !vg.StackFlipExitEnabled() {
+		t.Fatal("vegas stack-flip exit should be enabled")
+	}
+	if !vg.StackRequired() || !vg.FastSideRequired() || vg.FastTurnRequired() || vg.SwingRequired() || vg.ExitOnTunnelLossEnabled() {
+		t.Fatal("vegas filters drifted")
+	}
 	if cfg.Strategy.Trend.ReentryCooldown != 4 {
 		t.Fatalf("trend.reentry_cooldown = %d, want 4", cfg.Strategy.Trend.ReentryCooldown)
 	}
@@ -167,6 +195,19 @@ func TestFiltersDefaultOn(t *testing.T) {
 	}
 	if tr.ExitOnEMA20LossEnabled() {
 		t.Fatal("omitted exit_on_ema20_loss must default to disabled")
+	}
+	bare := VegasConfig{}
+	if !bare.TPEnabled() || !bare.StackRequired() || !bare.FastSideRequired() {
+		t.Fatal("omitted vegas gates must default to enabled")
+	}
+	if bare.FastTurnRequired() || bare.SwingRequired() || bare.ExitOnTunnelLossEnabled() {
+		t.Fatal("omitted vegas opt-in gates must default to disabled")
+	}
+	if !bare.StackFlipExitEnabled() {
+		t.Fatal("omitted exit_on_stack_flip must default to enabled")
+	}
+	if bare.WithDefaults().Interval != "4h" {
+		t.Fatal("omitted vegas interval must default to 4h")
 	}
 	tr.RequireEMA20Side = &off
 	if tr.EMA20SideRequired() {

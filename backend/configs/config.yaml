@@ -26,7 +26,7 @@ timeframes:
   entry: "15m"    # 小周期：趋势策略进场与跟踪止损（squeeze 仍只用 primary）
 
 strategy:
-  name: "trend"      # trend = EMA 回调续势 | squeeze = 波动压缩突破
+  name: "trend"      # trend = EMA 回调续势 | squeeze = 波动压缩突破 | vegas = 维加斯通道
   atr_period: 14       # ATR 周期（两套策略共用）
   min_bars: 220        # 至少需要的历史 K 线（两套策略共用）
 
@@ -100,6 +100,47 @@ strategy:
     reentry_atr: 0.25        # |现价−上次开仓价| 或 |通道沿−上次沿| 小于此×ATR 则拒绝
     reentry_cooldown: 2      # 离场后至少再等 N 根主周期 K 线
     require_reset: true      # 必须先收盘回到通道内，才允许下一次穿越
+
+  # 仅 name: vegas 时生效。周期用这里的 interval，不跟 timeframes.primary。
+  # 只做通道刚排好后的回踩，拿住单边，直到 144/169 再次交叉。不设固定止盈。
+  vegas:
+    interval: "4h"           # 1h 回踩胜率在后一段行情里站不住，4h 才是这套参数的周期
+    ema_fast: 12             # 动量过滤
+    ema_tunnel_fast: 144     # 通道上沿/下沿的一条
+    ema_tunnel_slow: 169     # 通道另一条
+    slope_bars: 8
+    slope_min_atr: 0.15      # 慢隧道 8 根内至少走 0.15×ATR，过滤走平
+    adx_period: 14
+    adx_min: 25              # ADX 低于此值不开仓；0 表示关闭
+    establish_bars: 10       # 回踩前这么多根内必须有收盘在通道趋势一侧
+    min_stack_age: 0         # 0 = 不要求通道排列已经持续多久
+    max_stack_age: 120       # 只做排列后的前 120 根（4h 约 20 天），不接趋势末端的回踩
+    touch_atr: 0.8           # 影线进入近端通道 0.8×ATR 内算回踩
+    reclaim_min_atr: 0.05    # 确认收盘须重新离开近端
+    chase_max_atr: 2.5       # 离开通道超过此倍数不追
+    pierce_max_atr: 0.35     # 回踩收盘跌破远端超过此倍数则放弃
+    atr_stop_mult: 0.25      # 止损在回踩极值/远端之外再垫这么多 ATR
+    min_stop_atr: 1.0        # 更近则拉宽到 1×ATR
+    atr_trail_mult: 8        # 跟踪放得很宽，正常回踩碰不到
+    trail_bars: 12
+    trail_after_r: 3         # 浮盈未到 3R 不收紧，避免单边中途被扫掉
+    tp_r: 1.5                # 仅 use_tp 打开时生效
+    tp_portion: 0            # 0 = 全平；(0,1) = 先减仓
+    use_tp: false            # 不设固定止盈，单边交给通道翻转和宽跟踪
+    breakeven_after_r: 0     # 0 = 不推保本
+    time_stop_bars: 0        # 0 = 关闭时间止损
+    time_stop_min_r: 0
+    require_bar_confirm: true
+    close_confirm_frac: 0.55
+    require_stack: true      # 多头要求 EMA144 > EMA169
+    require_fast_side: true  # EMA12 必须在通道趋势一侧
+    require_fast_turn: false
+    require_swing: false
+    exit_on_tunnel_loss: false # 回到通道近端是回踩，不是离场
+    exit_on_stack_flip: true   # EMA144 穿回 EMA169 才认为这段单边结束
+    reentry_atr: 0.25
+    reentry_cooldown: 4
+    require_reset: true      # 止损后要先有一根完全离开通道的 K 线
 
 risk:
   risk_per_trade: 0.0075   # 单笔风险 0.75% 权益

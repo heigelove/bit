@@ -10,6 +10,15 @@ import (
 	"github.com/work/bit/internal/types"
 )
 
+func TestVegasInterval(t *testing.T) {
+	if vegasInterval("vegas", "4h") != "4h" || vegasInterval("vegas_tunnel", " 1h ") != "1h" {
+		t.Fatal("vegas should keep its own interval")
+	}
+	if vegasInterval("trend", "4h") != "" || vegasInterval("squeeze", "4h") != "" {
+		t.Fatal("other strategies must ignore the vegas interval")
+	}
+}
+
 func TestParseInterval(t *testing.T) {
 	cases := []struct {
 		in   string

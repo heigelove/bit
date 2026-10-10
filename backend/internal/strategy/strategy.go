@@ -60,8 +60,10 @@ func New(name, symbol string, cfg config.StrategyConfig) (Strategy, error) {
 		return NewTrendFollow(symbol, cfg), nil
 	case "squeeze", "squeeze_breakout":
 		return NewSqueezeBreakout(symbol, cfg), nil
+	case "vegas", "vegas_tunnel":
+		return NewVegasTunnel(symbol, cfg), nil
 	default:
-		return nil, fmt.Errorf("unknown strategy %q (want \"trend\" or \"squeeze\")", name)
+		return nil, fmt.Errorf("unknown strategy %q (want \"trend\", \"squeeze\", or \"vegas\")", name)
 	}
 }
 

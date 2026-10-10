@@ -8,6 +8,7 @@
 |------|--------|------|------|
 | 趋势回调 | `trend` / `trend_follow` | `TrendFollow` | 1h 定方向，15m 在 1h EMA 附近回调进场，1h ATR 止损与跟踪 |
 | 压缩突破 | `squeeze` / `squeeze_breakout` | `SqueezeBreakout` | 主周期 Donchian 突破，只在波动压缩后开仓 |
+| 维加斯通道 | `vegas` / `vegas_tunnel` | `VegasTunnel` | 4h 回踩刚形成的 EMA144/169 通道，拿到排列再次交叉 |
 
 共用：`atr_period: 14`，`min_bars: 220`（squeeze 还会按指标预热再抬高下限）。
 
@@ -27,7 +28,7 @@
 规则：
 
 1. 最后一根未收盘 K 线会被丢掉，信号只看已收盘 bar。
-2. 趋势策略若配置了与主周期不同的 `timeframes.entry`（默认 15m），引擎会把这组 K 线放进 `MarketContext.Entry`。squeeze **不用**入场周期。
+2. 趋势策略若配置了与主周期不同的 `timeframes.entry`（默认 15m），引擎会把这组 K 线放进 `MarketContext.Entry`。squeeze **不用**入场周期。vegas 也不用，它按自己的 `strategy.vegas.interval`（默认 4h）拉 K 线，不跟 `timeframes.primary`。
 3. 持仓状态每轮从纸面账户或币安仓位推入策略；重启后靠 Redis 快照恢复跟踪止损和再入场锁。
 4. 策略本身不算仓位数量。数量由风控按「单笔风险 / 止损距离」计算，再受名义价值上限约束。
 
@@ -226,6 +227,43 @@ stop = min(现价 − atr_stop_mult × 1h ATR, 近 10 根 1h 摆动低点)
 
 ---
 
+## 维加斯通道（VegasTunnel）
+
+文件：`backend/internal/strategy/vegas.go`。只用 `strategy.vegas.interval`（默认 **4h**），不用 15m。
+
+通道是 EMA144 与 EMA169，近端是离价格更近的那一条。EMA12 用来确认动量还在通道的趋势一侧。做的是**已经站在通道外之后的回踩**，不是从通道另一侧穿出来的突破。
+
+### 开仓
+
+多头要同时满足（空头对称）：
+
+1. **排列**：EMA144 > EMA169，且 EMA169 在 `slope_bars` 内的升幅 ≥ `slope_min_atr` × ATR。
+2. **动量**：EMA12 在通道近端之外。ADX ≥ `adx_min`（25；写成 0 则不看 ADX）。
+3. **先有趋势**：回踩之前 `establish_bars` 根里，有收盘站在通道外。通道内第一次收上去不算。
+4. **回踩**：当根或上一根的影线碰到近端（允许 `touch_atr` × ATR 的距离），且回踩收盘没有打穿远端超过 `pierce_max_atr` × ATR。
+5. **确认**：这一根收盘重新离开近端至少 `reclaim_min_atr` × ATR，K 线顺势，收盘落在这根振幅靠趋势一侧至少 `close_confirm_frac`（0.55）的位置，而且离近端不超过 `chase_max_atr` × ATR。上一根已经满足同样条件则不再开，避免同一脚回踩连续进。
+
+`max_stack_age: 120` 只接排列形成后大约 20 天（4h）里的回踩。更晚的回踩多半是单边末端，不再开。
+
+初始止损取回踩极值与通道远端的更远一侧，再垫 `atr_stop_mult` × ATR；距离短于 `min_stop_atr` × ATR 时拉宽到该距离。
+
+### 持仓
+
+目标是把这段单边拿完，而不是在固定盈亏比上离场。
+
+- 不设固定止盈（`use_tp: false`）。价格回到通道近端只是下一次回踩，默认不平仓。
+- **EMA144 穿回 EMA169**（`exit_on_stack_flip`）才视为这段趋势结束。
+- 浮盈未到 `trail_after_r`（3R）之前，止损停在开仓位。
+- 之后用近 `trail_bars` 根极值减去 `atr_trail_mult` × ATR（8）。倍数故意放宽，正常回撤碰不到，只防通道还没交叉时的急跌。
+
+再入场：先出现一根完全离开通道的 K 线，再过 `reentry_cooldown` 根，并且价格或通道沿离开上次开仓至少 `reentry_atr` × ATR。
+
+### 回测（ETHUSDT 永续 4h，2024-10-15 ~ 2026-10-10，初始 10000 USDT）
+
+同一段行情里，固定 1.5R 止盈是 15 笔、胜率 60%、单笔最大约 +210 USDT。改成「只做趋势前段、拿到通道翻转」之后是 3 笔、1 胜 2 负、盈亏比 2.58、合计约 +247 USDT，最大回撤 2.6%。那笔盈利单约 +405 USDT，跟踪止损几乎没把它提前扫掉。样本只有 3 笔，说明的是出场方式能把单边留住，不是稳定的高胜率。
+
+---
+
 ## 共用：再入场锁
 
 文件：`backend/internal/strategy/reentry.go`。
@@ -296,6 +334,21 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `squeeze breakout, ATR% rank …` | 开仓 |
 | `TP1 …` / `trail stop … hit` / `closed back inside channel` / `time stop …` | 减仓或离场 |
 
+**vegas 常见**
+
+| reason | 含义 |
+|--------|------|
+| `tunnel not stacked long/short` | 144/169 没有顺着该方向排列 |
+| `EMA12 not above/below tunnel` | 快线还在通道里 |
+| `not a pullback: tunnel was not held` | 这是第一次穿出通道，不是回踩 |
+| `no pullback to tunnel` / `pullback broke the tunnel` | 没碰到通道，或回踩收盘打穿了 |
+| `too far from tunnel, no chase` | 确认根离通道太远 |
+| `weak reclaim bar` / `weak reclaim close` | 确认 K 线不顺势 |
+| `vegas pullback reclaim/reject` | 开多 / 开空 |
+| `tunnel stack flipped` | 144/169 反向交叉，单边结束 |
+| `tp …R` / `trail stop … hit` | 固定止盈（默认关）或宽跟踪打到 |
+| `pullback already traded` | 上一根已经是同一脚回踩 |
+
 ---
 
 ## 代码入口
@@ -305,10 +358,11 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `backend/internal/strategy/strategy.go` | 接口、工厂、已收盘 bar |
 | `backend/internal/strategy/trend.go` | 趋势回调 |
 | `backend/internal/strategy/squeeze.go` | 压缩突破 |
+| `backend/internal/strategy/vegas.go` | 维加斯通道 |
 | `backend/internal/strategy/reentry.go` | 再入场锁 |
 | `backend/internal/config/config.go` | 参数与默认值 |
 | `backend/configs/config.yaml` | 当前运行配置 |
 | `backend/internal/engine/engine.go` | 拉 K 线、执行、实盘止损 |
 | `backend/internal/risk/manager.go` | 仓位与熔断 |
 
-切换策略：改 `strategy.name` 为 `trend` 或 `squeeze`，重启 `cmd/trader`。
+切换策略：改 `strategy.name` 为 `trend`、`squeeze` 或 `vegas`，重启 `cmd/trader`。vegas 使用 `strategy.vegas.interval`，默认 4h。

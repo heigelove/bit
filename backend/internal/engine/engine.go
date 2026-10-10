@@ -219,7 +219,13 @@ func (e *Engine) cycle(ctx context.Context) error {
 	if !e.cfg.IsPaper() {
 		defer e.syncLiveFills(ctx)
 	}
-	klines, err := e.client.Klines(ctx, e.cfg.Symbol.Name, e.cfg.Timeframes.Primary, e.cfg.Engine.KlineLimit)
+	tf := e.cfg.Timeframes.Primary
+	if e.strategy.Name() == "vegas" {
+		if iv := strings.TrimSpace(e.cfg.Strategy.Vegas.Interval); iv != "" {
+			tf = iv
+		}
+	}
+	klines, err := e.client.Klines(ctx, e.cfg.Symbol.Name, tf, e.cfg.Engine.KlineLimit)
 	if err != nil {
 		return err
 	}

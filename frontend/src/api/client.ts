@@ -151,6 +151,7 @@ export type BacktestDefaults = {
   strategies: string[]
   primary: string
   entry: string
+  vegas_interval?: string
   initial_balance: number
   fee_rate: number
   slippage_bps: number

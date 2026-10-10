@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -46,13 +47,14 @@ type Timeframes struct {
 }
 
 type StrategyConfig struct {
-	// Name selects the strategy implementation: "trend" or "squeeze".
+	// Name selects the strategy implementation: "trend", "squeeze", or "vegas".
 	Name      string `yaml:"name"`
 	ATRPeriod int    `yaml:"atr_period"`
 	MinBars   int    `yaml:"min_bars"`
 
 	Trend   TrendConfig   `yaml:"trend"`
 	Squeeze SqueezeConfig `yaml:"squeeze"`
+	Vegas   VegasConfig   `yaml:"vegas"`
 }
 
 // TrendConfig tunes the EMA pullback / continuation strategy.
@@ -68,13 +70,13 @@ type TrendConfig struct {
 	UseEMA200Filter bool    `yaml:"use_ema200_filter"`
 
 	// Chop filters (0 / false = disabled).
-	ADXRisingBars   int     `yaml:"adx_rising_bars"`    // require ADX > ADX[N bars ago]
-	ADXRisingExempt float64 `yaml:"adx_rising_exempt"`  // skip rising check when ADX already ≥ this
-	EMASepMinATR    float64 `yaml:"ema_sep_min_atr"`    // |EMA fast−slow| must exceed this × ATR
-	EMASlopeBars    int     `yaml:"ema_slope_bars"`     // slow-EMA slope lookback
-	EMASlopeMinATR  float64 `yaml:"ema_slope_min_atr"`  // |Δ slow EMA| over lookback ≥ this × ATR
-	UseDIFilter     bool    `yaml:"use_di_filter"`      // long needs +DI > −DI (and vice versa)
-	CrossADXBonus   float64 `yaml:"cross_adx_bonus"`    // fresh EMA cross needs ADX ≥ ADXMin + bonus
+	ADXRisingBars   int     `yaml:"adx_rising_bars"`   // require ADX > ADX[N bars ago]
+	ADXRisingExempt float64 `yaml:"adx_rising_exempt"` // skip rising check when ADX already ≥ this
+	EMASepMinATR    float64 `yaml:"ema_sep_min_atr"`   // |EMA fast−slow| must exceed this × ATR
+	EMASlopeBars    int     `yaml:"ema_slope_bars"`    // slow-EMA slope lookback
+	EMASlopeMinATR  float64 `yaml:"ema_slope_min_atr"` // |Δ slow EMA| over lookback ≥ this × ATR
+	UseDIFilter     bool    `yaml:"use_di_filter"`     // long needs +DI > −DI (and vice versa)
+	CrossADXBonus   float64 `yaml:"cross_adx_bonus"`   // fresh EMA cross needs ADX ≥ ADXMin + bonus
 	// MinStopATR is the floor vs higher-TF ATR. WidenMinStop (default on) stretches
 	// a tight 15m stop out to this distance; explicit false rejects the entry.
 	MinStopATR   float64 `yaml:"min_stop_atr"`
@@ -99,24 +101,24 @@ type TrendConfig struct {
 	// AllowHTFCross (default on): 1h EMA20/60 cross may open on the completing 15m bar.
 	AllowHTFCross *bool `yaml:"allow_htf_cross"`
 	// AllowHTFPullback (default on): 1h wick to 1h EMA20 that closes back in trend.
-	AllowHTFPullback *bool   `yaml:"allow_htf_pullback"`
+	AllowHTFPullback  *bool   `yaml:"allow_htf_pullback"`
 	HTFPullbackMinATR float64 `yaml:"htf_pullback_min_atr"` // confirm close must clear EMA20 by this × ATR
 	// HTFPullbackConfirm (default on): enter on the NEXT 1h bar if it still holds EMA20.
 	HTFPullbackConfirm *bool `yaml:"htf_pullback_confirm"`
 	// AllowHTFFlag (default on): 1h pause then break, for trends that never tag EMA20.
-	AllowHTFFlag     *bool   `yaml:"allow_htf_flag"`
-	FlagPauseBars    int     `yaml:"flag_pause_bars"`     // bars that must contract before the break
-	FlagMaxRangeATR  float64 `yaml:"flag_max_range_atr"`  // pause high−low must be ≤ this × 1h ATR
-	FlagMinBreakATR  float64 `yaml:"flag_min_break_atr"`  // close must clear the pause by this × ATR
-	FlagMaxExtATR    float64 `yaml:"flag_max_ext_atr"`    // reject if close is farther than this × ATR from EMA20
+	AllowHTFFlag    *bool   `yaml:"allow_htf_flag"`
+	FlagPauseBars   int     `yaml:"flag_pause_bars"`    // bars that must contract before the break
+	FlagMaxRangeATR float64 `yaml:"flag_max_range_atr"` // pause high−low must be ≤ this × 1h ATR
+	FlagMinBreakATR float64 `yaml:"flag_min_break_atr"` // close must clear the pause by this × ATR
+	FlagMaxExtATR   float64 `yaml:"flag_max_ext_atr"`   // reject if close is farther than this × ATR from EMA20
 	// ExitOnEMA20Loss (default off): flattening when 1h loses EMA20 fights pullback entries
 	// (enter at EMA20, exit at EMA20). Trail + EMA20/60 cross remain the exits.
 	ExitOnEMA20Loss *bool `yaml:"exit_on_ema20_loss"`
 
 	// Re-entry gates after a stop: skip the same EMA touch until it resets.
-	ReentryATR      float64 `yaml:"reentry_atr"`      // reject if |price−last entry| < this × ATR
-	ReentryCooldown int     `yaml:"reentry_cooldown"` // entry-TF bars to wait after an exit
-	RequireReset    *bool   `yaml:"require_reset"`    // need a bar that fully leaves EMA20 first
+	ReentryATR      float64 `yaml:"reentry_atr"`       // reject if |price−last entry| < this × ATR
+	ReentryCooldown int     `yaml:"reentry_cooldown"`  // entry-TF bars to wait after an exit
+	RequireReset    *bool   `yaml:"require_reset"`     // need a bar that fully leaves EMA20 first
 	ReentryHTFReset *bool   `yaml:"reentry_htf_reset"` // MTF: 1h must also close back beyond EMA20
 
 	// Regime invalidation: omitted = on. Blocks new entries (and 1h holds) once
@@ -305,6 +307,171 @@ func (s SqueezeConfig) ResetRequired() bool {
 	return s.RequireReset == nil || *s.RequireReset
 }
 
+// VegasConfig tunes the Vegas Tunnel: EMA 12 filters momentum, EMA 144/169
+// are the tunnel. Entries are pullbacks into that tunnel, not breakouts.
+type VegasConfig struct {
+	// Interval is the candle size this strategy trades. Empty becomes 4h:
+	// on ETHUSDT the 1h tunnel tags too late, and that win rate did not hold
+	// up on a later slice of history. Trend and squeeze ignore this field.
+	Interval      string `yaml:"interval"`
+	EMAFast       int    `yaml:"ema_fast"`        // momentum filter, classically 12
+	EMATunnelFast int    `yaml:"ema_tunnel_fast"` // tunnel, classically 144
+	EMATunnelSlow int    `yaml:"ema_tunnel_slow"` // tunnel, classically 169
+
+	SlopeBars   int     `yaml:"slope_bars"`    // slow-tunnel slope lookback
+	SlopeMinATR float64 `yaml:"slope_min_atr"` // |Δ slow tunnel| must reach this × ATR; 0 disables
+	ADXPeriod   int     `yaml:"adx_period"`
+	ADXMin      float64 `yaml:"adx_min"` // 0 disables the ADX gate
+
+	EstablishBars int `yaml:"establish_bars"` // how far back a close must have held beyond the tunnel
+	// MinStackAge / MaxStackAge limit how long EMA144 has stayed on the trade
+	// side of EMA169. 0 disables that bound. Late pullbacks are skipped when max is set.
+	MinStackAge   int     `yaml:"min_stack_age"`
+	MaxStackAge   int     `yaml:"max_stack_age"`
+	TouchATR      float64 `yaml:"touch_atr"`       // pullback counts when price reaches this × ATR of the near edge
+	ReclaimMinATR float64 `yaml:"reclaim_min_atr"` // confirm close must clear the near edge by this × ATR
+	ChaseMaxATR   float64 `yaml:"chase_max_atr"`   // reject confirms farther than this × ATR from the near edge
+	PierceMaxATR  float64 `yaml:"pierce_max_atr"`  // pullback close may sink this far past the far edge
+
+	ATRStopMult  float64 `yaml:"atr_stop_mult"` // extra pad beyond the pullback extreme / far edge
+	MinStopATR   float64 `yaml:"min_stop_atr"`  // widen a tighter stop out to this × ATR
+	ATRTrailMult float64 `yaml:"atr_trail_mult"`
+	TrailBars    int     `yaml:"trail_bars"`
+	TrailAfterR  float64 `yaml:"trail_after_r"` // do not chandelier-trail until this open profit
+
+	// TPR is the close-based target in R. UseTP omitted means on.
+	// TPPortion in (0,1) scales out; otherwise the target closes the whole position.
+	TPR       float64 `yaml:"tp_r"`
+	TPPortion float64 `yaml:"tp_portion"`
+	UseTP     *bool   `yaml:"use_tp"`
+	// BreakevenAfterR ratchets the stop to entry once progress reaches this many R. 0 = off.
+	BreakevenAfterR float64 `yaml:"breakeven_after_r"`
+
+	TimeStopBars int     `yaml:"time_stop_bars"` // 0 = off
+	TimeStopMinR float64 `yaml:"time_stop_min_r"`
+
+	RequireBarConfirm *bool   `yaml:"require_bar_confirm"`
+	CloseConfirmFrac  float64 `yaml:"close_confirm_frac"` // confirm close must sit this far up the bar's range
+	RequireStack      *bool   `yaml:"require_stack"`      // 144 above 169 for longs
+	RequireFastSide   *bool   `yaml:"require_fast_side"`  // EMA12 must be beyond the tunnel
+	RequireFastTurn   *bool   `yaml:"require_fast_turn"`  // EMA12 must tick in the trade's direction
+	RequireSwing      *bool   `yaml:"require_swing"`      // confirm bar must make a higher low / lower high
+	ExitOnTunnelLoss  *bool   `yaml:"exit_on_tunnel_loss"`
+	// ExitOnStackFlip closes when EMA144 crosses back through EMA169. Omitted = on.
+	// That is the trend-end exit: a fixed target would cut the one-sided move.
+	ExitOnStackFlip *bool `yaml:"exit_on_stack_flip"`
+
+	ReentryATR      float64 `yaml:"reentry_atr"`
+	ReentryCooldown int     `yaml:"reentry_cooldown"`
+	RequireReset    *bool   `yaml:"require_reset"`
+}
+
+func (v VegasConfig) WithDefaults() VegasConfig {
+	if strings.TrimSpace(v.Interval) == "" {
+		v.Interval = "4h"
+	}
+	if v.EMAFast <= 0 {
+		v.EMAFast = 12
+	}
+	if v.EMATunnelFast <= 0 {
+		v.EMATunnelFast = 144
+	}
+	if v.EMATunnelSlow <= 0 {
+		v.EMATunnelSlow = 169
+	}
+	if v.SlopeBars <= 0 {
+		v.SlopeBars = 8
+	}
+	if v.SlopeMinATR <= 0 {
+		v.SlopeMinATR = 0.15
+	}
+	if v.ADXMin > 0 && v.ADXPeriod <= 0 {
+		v.ADXPeriod = 14
+	}
+	if v.EstablishBars <= 0 {
+		v.EstablishBars = 10
+	}
+	if v.TouchATR <= 0 {
+		v.TouchATR = 0.2
+	}
+	if v.ReclaimMinATR <= 0 {
+		v.ReclaimMinATR = 0.05
+	}
+	if v.ChaseMaxATR <= 0 {
+		v.ChaseMaxATR = 1.2
+	}
+	if v.PierceMaxATR <= 0 {
+		v.PierceMaxATR = 0.35
+	}
+	if v.ATRStopMult <= 0 {
+		v.ATRStopMult = 0.25
+	}
+	if v.MinStopATR <= 0 {
+		v.MinStopATR = 1.0
+	}
+	if v.ATRTrailMult <= 0 {
+		v.ATRTrailMult = 2.0
+	}
+	if v.TrailBars <= 0 {
+		v.TrailBars = 8
+	}
+	if v.TrailAfterR <= 0 {
+		v.TrailAfterR = 1.0
+	}
+	if v.TPR <= 0 {
+		v.TPR = 1.5
+	}
+	if v.ReentryATR <= 0 {
+		v.ReentryATR = 0.25
+	}
+	if v.ReentryCooldown <= 0 {
+		v.ReentryCooldown = 4
+	}
+	if v.CloseConfirmFrac <= 0 {
+		v.CloseConfirmFrac = 0.55
+	}
+	if v.TimeStopBars > 0 && v.TimeStopMinR <= 0 {
+		v.TimeStopMinR = 0.5
+	}
+	return v
+}
+
+func (v VegasConfig) TPEnabled() bool {
+	return v.UseTP == nil || *v.UseTP
+}
+
+func (v VegasConfig) BarConfirmRequired() bool {
+	return v.RequireBarConfirm == nil || *v.RequireBarConfirm
+}
+
+func (v VegasConfig) StackRequired() bool {
+	return v.RequireStack == nil || *v.RequireStack
+}
+
+func (v VegasConfig) FastSideRequired() bool {
+	return v.RequireFastSide == nil || *v.RequireFastSide
+}
+
+func (v VegasConfig) FastTurnRequired() bool {
+	return v.RequireFastTurn != nil && *v.RequireFastTurn
+}
+
+func (v VegasConfig) SwingRequired() bool {
+	return v.RequireSwing != nil && *v.RequireSwing
+}
+
+func (v VegasConfig) ExitOnTunnelLossEnabled() bool {
+	return v.ExitOnTunnelLoss != nil && *v.ExitOnTunnelLoss
+}
+
+func (v VegasConfig) StackFlipExitEnabled() bool {
+	return v.ExitOnStackFlip == nil || *v.ExitOnStackFlip
+}
+
+func (v VegasConfig) ResetRequired() bool {
+	return v.RequireReset == nil || *v.RequireReset
+}
+
 type RiskConfig struct {
 	RiskPerTrade       float64 `yaml:"risk_per_trade"`
 	MaxTotalRisk       float64 `yaml:"max_total_risk"`
@@ -370,6 +537,7 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Strategy.Trend = cfg.Strategy.Trend.WithDefaults()
 	cfg.Strategy.Squeeze = cfg.Strategy.Squeeze.WithDefaults()
+	cfg.Strategy.Vegas = cfg.Strategy.Vegas.WithDefaults()
 	if cfg.Risk.MaxNotionalPct <= 0 {
 		cfg.Risk.MaxNotionalPct = 0.7
 	}
@@ -474,8 +642,21 @@ func (c *Config) Validate() error {
 		if c.Strategy.Squeeze.TP1Portion >= 1 {
 			return fmt.Errorf("strategy.squeeze.tp1_portion must be < 1")
 		}
+	case "vegas", "vegas_tunnel":
+		vg := c.Strategy.Vegas
+		if vg.EMAFast >= vg.EMATunnelFast || vg.EMATunnelFast >= vg.EMATunnelSlow {
+			return fmt.Errorf("strategy.vegas periods must rise ema_fast < ema_tunnel_fast < ema_tunnel_slow")
+		}
+		if vg.TPPortion < 0 || vg.TPPortion >= 1 {
+			return fmt.Errorf("strategy.vegas.tp_portion must be in [0,1)")
+		}
+		switch strings.TrimSpace(vg.Interval) {
+		case "", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d":
+		default:
+			return fmt.Errorf("strategy.vegas.interval %q is not supported", vg.Interval)
+		}
 	default:
-		return fmt.Errorf("strategy.name %q must be trend or squeeze", c.Strategy.Name)
+		return fmt.Errorf("strategy.name %q must be trend, squeeze, or vegas", c.Strategy.Name)
 	}
 	if c.Risk.MaxNotionalPct > 1 {
 		return fmt.Errorf("risk.max_notional_pct must be <= 1")

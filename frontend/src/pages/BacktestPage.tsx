@@ -24,6 +24,27 @@ function fmt(n: number | undefined | null, digits = 2) {
   return n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
+function timeframeHint(strategy: string, defaults: BacktestDefaults | null) {
+  if (!defaults) return '使用 config.yaml 中的周期、杠杆与费率'
+  const cost = `杠杆 ${defaults.leverage}x · 手续费 ${defaults.fee_rate} · 滑点 ${defaults.slippage_bps}bps`
+  if (strategy === 'vegas') {
+    return `${defaults.vegas_interval || '4h'} · ${cost}`
+  }
+  const tf = defaults.entry ? `${defaults.primary} + ${defaults.entry}` : defaults.primary
+  return `${tf} · ${cost}`
+}
+
+function strategyLabel(name: string) {
+  switch (name) {
+    case 'squeeze':
+      return 'squeeze · 压缩突破'
+    case 'vegas':
+      return 'vegas · 维加斯通道'
+    default:
+      return 'trend · 趋势回调'
+  }
+}
+
 function fmtPct(n: number | undefined | null) {
   if (n == null || Number.isNaN(n)) return '—'
   const sign = n > 0 ? '+' : ''
@@ -106,9 +127,9 @@ export function BacktestPage() {
           <label className="field">
             <span>策略</span>
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-              {(defaults?.strategies ?? ['trend', 'squeeze']).map((name) => (
+              {(defaults?.strategies ?? ['trend', 'squeeze', 'vegas']).map((name) => (
                 <option key={name} value={name}>
-                  {name === 'squeeze' ? 'squeeze · 压缩突破' : 'trend · 趋势回调'}
+                  {strategyLabel(name)}
                 </option>
               ))}
             </select>
@@ -132,9 +153,7 @@ export function BacktestPage() {
           <div className="field form-hint">
             <span>参数</span>
             <p className="mono muted">
-              {defaults
-                ? `${defaults.primary}${defaults.entry ? ` + ${defaults.entry}` : ''} · 杠杆 ${defaults.leverage}x · 手续费 ${defaults.fee_rate} · 滑点 ${defaults.slippage_bps}bps`
-                : '使用 config.yaml 中的周期、杠杆与费率'}
+              {timeframeHint(strategy, defaults)}
             </p>
           </div>
         </form>

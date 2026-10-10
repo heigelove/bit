@@ -62,9 +62,18 @@ type sim struct {
 
 // Run fetches history and simulates the strategy over [params.Start, params.End].
 func (r *Runner) Run(ctx context.Context, params Params) (*Result, error) {
+	explicitTF := strings.TrimSpace(params.Primary) != ""
 	p, err := r.normalize(params)
 	if err != nil {
 		return nil, err
+	}
+	// Vegas is tuned on its own candle size. An explicit primary in the request
+	// still wins, so a caller can compare timeframes.
+	if !explicitTF {
+		if iv := vegasInterval(p.Strategy, r.cfg.Strategy.Vegas.Interval); iv != "" {
+			p.Primary = iv
+			p.Entry = iv
+		}
 	}
 	pDur, err := ParseInterval(p.Primary)
 	if err != nil {
@@ -411,6 +420,15 @@ func (s *sim) markToMarket(bar types.Kline) {
 		Equity:        eq,
 		CumulativePNL: eq - s.params.InitialBalance,
 	})
+}
+
+func vegasInterval(name, interval string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "vegas", "vegas_tunnel":
+	default:
+		return ""
+	}
+	return strings.TrimSpace(interval)
 }
 
 func useEntryTF(name, primary, entry string) bool {
