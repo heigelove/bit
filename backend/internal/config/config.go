@@ -47,14 +47,15 @@ type Timeframes struct {
 }
 
 type StrategyConfig struct {
-	// Name selects the strategy implementation: "trend", "squeeze", or "vegas".
+	// Name selects the strategy implementation: "trend", "squeeze", "breakout", or "vegas".
 	Name      string `yaml:"name"`
 	ATRPeriod int    `yaml:"atr_period"`
 	MinBars   int    `yaml:"min_bars"`
 
-	Trend   TrendConfig   `yaml:"trend"`
-	Squeeze SqueezeConfig `yaml:"squeeze"`
-	Vegas   VegasConfig   `yaml:"vegas"`
+	Trend    TrendConfig    `yaml:"trend"`
+	Squeeze  SqueezeConfig  `yaml:"squeeze"`
+	Breakout BreakoutConfig `yaml:"breakout"`
+	Vegas    VegasConfig    `yaml:"vegas"`
 }
 
 // TrendConfig tunes the EMA pullback / continuation strategy.
@@ -307,12 +308,163 @@ func (s SqueezeConfig) ResetRequired() bool {
 	return s.RequireReset == nil || *s.RequireReset
 }
 
+// BreakoutConfig tunes the Donchian continuation breakout.
+// Direction comes from an already-stacked EMA trend plus ADX/DI.
+// The entry itself is a fresh close through the prior N-bar high or low.
+type BreakoutConfig struct {
+	Donchian  int     `yaml:"donchian"`
+	EMAFast   int     `yaml:"ema_fast"`
+	EMASlow   int     `yaml:"ema_slow"`
+	EMAFilter int     `yaml:"ema_filter"`
+	ADXPeriod int     `yaml:"adx_period"`
+	ADXMin    float64 `yaml:"adx_min"`
+
+	UseDIFilter  *bool `yaml:"use_di_filter"`
+	UseEMAFilter *bool `yaml:"use_ema_filter"`
+
+	// EMASepMinATR rejects a tangled stack. 0 disables.
+	EMASepMinATR float64 `yaml:"ema_sep_min_atr"`
+	// EMASlopeMinATR rejects a flat slow EMA. 0 disables: a pause before the
+	// break often flattens the slope even while the stack is still valid.
+	EMASlopeBars   int     `yaml:"ema_slope_bars"`
+	EMASlopeMinATR float64 `yaml:"ema_slope_min_atr"`
+
+	// MinBreakATR / BreakoutMaxATR bound how far the close clears the channel,
+	// in ATRs of the bar before the signal.
+	MinBreakATR    float64 `yaml:"min_break_atr"`
+	BreakoutMaxATR float64 `yaml:"breakout_max_atr"`
+	// MinRangeATR requires the signal bar's high-low to reach this × prior ATR. 0 disables.
+	MinRangeATR       float64 `yaml:"min_range_atr"`
+	RequireBarConfirm *bool   `yaml:"require_bar_confirm"`
+	CloseConfirmFrac  float64 `yaml:"close_confirm_frac"`
+
+	// Stop sits beyond the signal-bar extreme, then pads by ATRStopMult.
+	// A tighter result is widened to MinStopATR; a bar taller than MaxStopATR is skipped.
+	ATRStopMult float64 `yaml:"atr_stop_mult"`
+	MinStopATR  float64 `yaml:"min_stop_atr"`
+	MaxStopATR  float64 `yaml:"max_stop_atr"`
+
+	ChandelierPeriod int     `yaml:"chandelier_period"`
+	ChandelierMult   float64 `yaml:"chandelier_mult"`
+	TrailAfterR      float64 `yaml:"trail_after_r"`
+
+	ExitOnStackFlip *bool `yaml:"exit_on_stack_flip"`
+	ExitOnMidLoss   *bool `yaml:"exit_on_mid_loss"`
+
+	TimeStopBars int     `yaml:"time_stop_bars"`
+	TimeStopMinR float64 `yaml:"time_stop_min_r"`
+
+	// UseTP omitted means off. TPPortion in (0,1) scales out; 0 closes the whole position.
+	TPR       float64 `yaml:"tp_r"`
+	TPPortion float64 `yaml:"tp_portion"`
+	UseTP     *bool   `yaml:"use_tp"`
+
+	ReentryATR      float64 `yaml:"reentry_atr"`
+	ReentryCooldown int     `yaml:"reentry_cooldown"`
+	RequireReset    *bool   `yaml:"require_reset"`
+}
+
+func (b BreakoutConfig) DIFilterEnabled() bool {
+	return b.UseDIFilter == nil || *b.UseDIFilter
+}
+
+func (b BreakoutConfig) EMAFilterEnabled() bool {
+	return b.UseEMAFilter == nil || *b.UseEMAFilter
+}
+
+func (b BreakoutConfig) BarConfirmRequired() bool {
+	return b.RequireBarConfirm == nil || *b.RequireBarConfirm
+}
+
+func (b BreakoutConfig) StackFlipExitEnabled() bool {
+	return b.ExitOnStackFlip == nil || *b.ExitOnStackFlip
+}
+
+func (b BreakoutConfig) MidLossExitEnabled() bool {
+	return b.ExitOnMidLoss == nil || *b.ExitOnMidLoss
+}
+
+func (b BreakoutConfig) ResetRequired() bool {
+	return b.RequireReset == nil || *b.RequireReset
+}
+
+func (b BreakoutConfig) TPEnabled() bool {
+	return b.UseTP != nil && *b.UseTP
+}
+
+func (b BreakoutConfig) WithDefaults() BreakoutConfig {
+	if b.Donchian <= 0 {
+		b.Donchian = 20
+	}
+	if b.EMAFast <= 0 {
+		b.EMAFast = 20
+	}
+	if b.EMASlow <= 0 {
+		b.EMASlow = 60
+	}
+	if b.EMAFilter <= 0 {
+		b.EMAFilter = 200
+	}
+	if b.ADXPeriod <= 0 {
+		b.ADXPeriod = 14
+	}
+	if b.ADXMin <= 0 {
+		b.ADXMin = 20
+	}
+	if b.EMASlopeBars <= 0 {
+		b.EMASlopeBars = 5
+	}
+	if b.MinBreakATR <= 0 {
+		b.MinBreakATR = 0.1
+	}
+	if b.BreakoutMaxATR <= 0 {
+		b.BreakoutMaxATR = 1.0
+	}
+	if b.CloseConfirmFrac <= 0 || b.CloseConfirmFrac > 1 {
+		b.CloseConfirmFrac = 0.55
+	}
+	if b.ATRStopMult <= 0 {
+		b.ATRStopMult = 0.25
+	}
+	if b.MinStopATR <= 0 {
+		b.MinStopATR = 1.0
+	}
+	if b.MaxStopATR <= 0 {
+		b.MaxStopATR = 3.0
+	}
+	if b.ChandelierPeriod <= 0 {
+		b.ChandelierPeriod = 22
+	}
+	if b.ChandelierMult <= 0 {
+		b.ChandelierMult = 3.0
+	}
+	if b.TrailAfterR <= 0 {
+		b.TrailAfterR = 1.0
+	}
+	if b.TimeStopBars <= 0 {
+		b.TimeStopBars = 16
+	}
+	if b.TimeStopMinR <= 0 {
+		b.TimeStopMinR = 0.5
+	}
+	if b.TPR <= 0 {
+		b.TPR = 2.0
+	}
+	if b.ReentryATR <= 0 {
+		b.ReentryATR = 0.25
+	}
+	if b.ReentryCooldown <= 0 {
+		b.ReentryCooldown = 3
+	}
+	return b
+}
+
 // VegasConfig tunes the Vegas Tunnel: EMA 12 filters momentum, EMA 144/169
 // are the tunnel. Entries are pullbacks into that tunnel, not breakouts.
 type VegasConfig struct {
 	// Interval is the candle size this strategy trades. Empty becomes 4h:
 	// on ETHUSDT the 1h tunnel tags too late, and that win rate did not hold
-	// up on a later slice of history. Trend and squeeze ignore this field.
+	// up on a later slice of history. Trend, squeeze, and breakout ignore this field.
 	Interval string `yaml:"interval"`
 	// EntryMode is "pullback" (already outside, dip back to the tunnel) or
 	// "breakout" (close through the tunnel from the other side). Empty is pullback.
@@ -550,6 +702,7 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Strategy.Trend = cfg.Strategy.Trend.WithDefaults()
 	cfg.Strategy.Squeeze = cfg.Strategy.Squeeze.WithDefaults()
+	cfg.Strategy.Breakout = cfg.Strategy.Breakout.WithDefaults()
 	cfg.Strategy.Vegas = cfg.Strategy.Vegas.WithDefaults()
 	if cfg.Risk.MaxNotionalPct <= 0 {
 		cfg.Risk.MaxNotionalPct = 0.7
@@ -655,6 +808,20 @@ func (c *Config) Validate() error {
 		if c.Strategy.Squeeze.TP1Portion >= 1 {
 			return fmt.Errorf("strategy.squeeze.tp1_portion must be < 1")
 		}
+	case "breakout", "trend_breakout":
+		bo := c.Strategy.Breakout
+		if bo.EMAFast >= bo.EMASlow {
+			return fmt.Errorf("strategy.breakout.ema_fast must be < ema_slow")
+		}
+		if bo.Donchian < 2 {
+			return fmt.Errorf("strategy.breakout.donchian must be >= 2")
+		}
+		if bo.TPPortion < 0 || bo.TPPortion >= 1 {
+			return fmt.Errorf("strategy.breakout.tp_portion must be in [0,1)")
+		}
+		if bo.MaxStopATR > 0 && bo.MinStopATR > bo.MaxStopATR {
+			return fmt.Errorf("strategy.breakout.max_stop_atr must be >= min_stop_atr")
+		}
 	case "vegas", "vegas_tunnel":
 		vg := c.Strategy.Vegas
 		if vg.EMAFast >= vg.EMATunnelFast || vg.EMATunnelFast >= vg.EMATunnelSlow {
@@ -669,7 +836,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("strategy.vegas.interval %q is not supported", vg.Interval)
 		}
 	default:
-		return fmt.Errorf("strategy.name %q must be trend, squeeze, or vegas", c.Strategy.Name)
+		return fmt.Errorf("strategy.name %q must be trend, squeeze, breakout, or vegas", c.Strategy.Name)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Strategy.Vegas.EntryMode)) {
 	case "", "pullback", "breakout":

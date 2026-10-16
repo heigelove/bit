@@ -30,12 +30,17 @@ function timeframeHint(strategy: string, defaults: BacktestDefaults | null) {
   if (strategy === 'vegas') {
     return `${defaults.vegas_interval || '4h'} · ${cost}`
   }
+  if (strategy === 'breakout') {
+    return `${defaults.primary || '1h'} · ${cost}`
+  }
   const tf = defaults.entry ? `${defaults.primary} + ${defaults.entry}` : defaults.primary
   return `${tf} · ${cost}`
 }
 
 function strategyLabel(name: string) {
   switch (name) {
+    case 'breakout':
+      return 'breakout · 趋势突破'
     case 'squeeze':
       return 'squeeze · 压缩突破'
     case 'vegas':
@@ -127,7 +132,7 @@ export function BacktestPage() {
           <label className="field">
             <span>策略</span>
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-              {(defaults?.strategies ?? ['trend', 'squeeze', 'vegas']).map((name) => (
+              {(defaults?.strategies ?? ['trend', 'breakout', 'squeeze', 'vegas']).map((name) => (
                 <option key={name} value={name}>
                   {strategyLabel(name)}
                 </option>

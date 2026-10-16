@@ -22,7 +22,7 @@ func (s *Server) handleBacktestDefaults(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"symbol":          s.cfg.Symbol.Name,
 		"strategy":        s.cfg.Strategy.Name,
-		"strategies":      []string{"trend", "squeeze", "vegas"},
+		"strategies":      []string{"trend", "breakout", "squeeze", "vegas"},
 		"primary":         s.cfg.Timeframes.Primary,
 		"entry":           s.cfg.Timeframes.Entry,
 		"vegas_interval":  s.cfg.Strategy.Vegas.Interval,

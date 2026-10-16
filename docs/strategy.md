@@ -7,10 +7,11 @@
 | 名称 | 配置值 | 实现 | 用途 |
 |------|--------|------|------|
 | 趋势回调 | `trend` / `trend_follow` | `TrendFollow` | 1h 定方向，15m 在 1h EMA 附近回调进场，1h ATR 止损与跟踪 |
+| 趋势突破 | `breakout` / `trend_breakout` | `TrendBreakout` | 主周期均线栈已经排好后，收盘打穿 Donchian 高低点 |
 | 压缩突破 | `squeeze` / `squeeze_breakout` | `SqueezeBreakout` | 主周期 Donchian 突破，只在波动压缩后开仓 |
 | 维加斯通道 | `vegas` / `vegas_tunnel` | `VegasTunnel` | 4h 回踩刚形成的 EMA144/169 通道，拿到排列再次交叉 |
 
-共用：`atr_period: 14`，`min_bars: 220`（squeeze 还会按指标预热再抬高下限）。
+共用：`atr_period: 14`，`min_bars: 220`（指标预热更长时，策略会再抬高下限）。
 
 ---
 
@@ -23,12 +24,12 @@
 - `NONE`：观望或持仓（持仓时 `StopLoss` 仍是当前跟踪止损，引擎会去对齐交易所条件单）
 - `OPEN_LONG` / `OPEN_SHORT`：开仓，必须带止损
 - `CLOSE_LONG` / `CLOSE_SHORT`：全部平掉
-- `REDUCE_LONG` / `REDUCE_SHORT`：按 `Portion` 减仓（仅 squeeze 的 TP1）
+- `REDUCE_LONG` / `REDUCE_SHORT`：按 `Portion` 减仓（squeeze 的 TP1；breakout 仅在 `use_tp` 打开且 `tp_portion` 介于 0 和 1 时）
 
 规则：
 
 1. 最后一根未收盘 K 线会被丢掉，信号只看已收盘 bar。
-2. 趋势策略若配置了与主周期不同的 `timeframes.entry`（默认 15m），引擎会把这组 K 线放进 `MarketContext.Entry`。squeeze **不用**入场周期。vegas 也不用，它按自己的 `strategy.vegas.interval`（默认 4h）拉 K 线，不跟 `timeframes.primary`。
+2. 趋势策略若配置了与主周期不同的 `timeframes.entry`（默认 15m），引擎会把这组 K 线放进 `MarketContext.Entry`。breakout 和 squeeze **不用**入场周期，只看主周期。vegas 也不用，它按自己的 `strategy.vegas.interval`（默认 4h）拉 K 线，不跟 `timeframes.primary`。
 3. 持仓状态每轮从纸面账户或币安仓位推入策略；重启后靠 Redis 快照恢复跟踪止损和再入场锁。
 4. 策略本身不算仓位数量。数量由风控按「单笔风险 / 止损距离」计算，再受名义价值上限约束。
 
@@ -274,6 +275,67 @@ stop = min(现价 − atr_stop_mult × 1h ATR, 近 10 根 1h 摆动低点)
 
 ---
 
+## 趋势突破（TrendBreakout）
+
+文件：`backend/internal/strategy/breakout.go`。只使用主周期（默认 1h），不用 15m。
+
+思路：均线栈、ADX、DI 已经顺着一个方向之后，等收盘打穿近 N 根高低点再进。不买回调（那是 trend），也不等波动先压到低分位（那是 squeeze）。已经停在通道外的 K 线不会重复开仓，必须是这一根才穿出去。
+
+### 开仓
+
+空仓时按顺序：
+
+1. **新鲜穿越**：收盘高于 Donchian 上轨（多）或低于下轨（空），且上一根收盘仍在对应轨道内侧或刚好压在轨道上。
+2. **趋势栈**：多头 EMA20 > EMA60，空头相反。
+3. **EMA200**：`use_ema_filter` 时，收盘须在过滤均线的趋势一侧。
+4. **DI**：`use_di_filter` 时，多头 +DI > −DI。
+5. **ADX** ≥ `adx_min`（20）。
+6. **均线张开**：`ema_sep_min_atr` > 0 时，|EMA20−EMA60| 至少这么多个 ATR。
+7. **慢线斜率**：只有 `ema_slope_min_atr` > 0 才启用。默认 0，突破前的停顿经常把斜率走平。
+8. **突破幅度**：收盘离开轨道至少 `min_break_atr` × **前一根** ATR，且不超过 `breakout_max_atr`。用突破前的 ATR，避免当根大 K 线自己把门槛抬高。
+9. **K 线**：高低区间至少 `min_range_atr` × 前一根 ATR（0 表示不要求）。`require_bar_confirm` 时收盘要落在顺势的一端。
+10. **再入场锁**。
+11. **止损**：放在突破 K 线低点之外（空头为高点），再垫 `atr_stop_mult` × ATR。短于 `min_stop_atr` 则拉宽；极值离收盘超过 `max_stop_atr` 则放弃，不追高潮棒。
+
+开仓原因是 `donchian breakout` / `donchian breakdown`。
+
+### 持仓
+
+浮盈未到 `trail_after_r`（1R）之前，止损停在开仓位。之后用吊灯（回看 `chandelier_period` 根极值，距离 `chandelier_mult` × ATR）只向有利方向收。
+
+| 动作 | 条件 | 默认 |
+|------|------|------|
+| 触及止损 | 收盘碰到跟踪止损 | — |
+| 均线反叉 | EMA20 穿回 EMA60 | `exit_on_stack_flip: true` |
+| 突破失败 | 收盘回到 Donchian 中轨内侧 | `exit_on_mid_loss: true` |
+| 时间止损 | 持仓 ≥ `time_stop_bars` 且进展 < `time_stop_min_r` | 16 根 / 0.5R |
+| 止盈 | `use_tp` 打开且进展 ≥ `tp_r` | 默认关。`tp_portion` 为 0 则全平，介于 0 和 1 则减仓 |
+
+### 再入场
+
+收盘回到通道内才算复位，再等 `reentry_cooldown`（3）根主周期，并且现价或轨道离开上次开仓至少 `reentry_atr` × ATR。
+
+省略时默认开启：`use_di_filter`、`use_ema_filter`、`require_bar_confirm`、`exit_on_stack_flip`、`exit_on_mid_loss`、`require_reset`。`use_tp` 省略则为关。`ema_slope_min_atr` 和 `min_range_atr` 为 0 表示关闭。`adx_min`、时间止损这些数值写成 0 时会被填回默认，不是关闭开关。
+
+### 趋势突破参数（当前配置）
+
+| 键 | 值 | 作用 |
+|----|----|------|
+| `donchian` | 20 | 突破通道，不含当根 |
+| `ema_fast` / `ema_slow` / `ema_filter` | 20 / 60 / 200 | 趋势栈与过滤均线 |
+| `adx_min` | 20 | 强度下限 |
+| `ema_sep_min_atr` | 0.3 | 均线间距 |
+| `ema_slope_min_atr` | 0 | 慢线斜率，默认关 |
+| `min_break_atr` / `breakout_max_atr` | 0.1 / 1.0 | 突破幅度上下限 |
+| `min_range_atr` | 0.6 | 突破 K 线不能太窄 |
+| `atr_stop_mult` / `min_stop_atr` / `max_stop_atr` | 0.25 / 1.0 / 3.0 | 止损垫、下限、高潮棒上限 |
+| `chandelier_period` / `chandelier_mult` | 22 / 3.0 | 1R 之后的跟踪 |
+| `trail_after_r` | 1.0 | 未到 1R 不收紧 |
+| `time_stop_bars` / `time_stop_min_r` | 16 / 0.5 | 走平就砍 |
+| `use_tp` | false | 不设固定止盈 |
+
+---
+
 ## 共用：再入场锁
 
 文件：`backend/internal/strategy/reentry.go`。
@@ -361,6 +423,21 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `tp …R` / `trail stop … hit` | 固定止盈（默认关）或宽跟踪打到 |
 | `pullback already traded` | 上一根已经是同一脚回踩 |
 
+**breakout 常见**
+
+| reason | 含义 |
+|--------|------|
+| `inside channel` / `outside channel, no fresh cross` | 没有新的穿越 |
+| `against EMA stack` / `against EMA200 filter` | 逆着均线栈或过滤均线 |
+| `DI disagrees` / `ADX … < …` | 方向指标或强度不够 |
+| `EMA tangled` / `EMA slope flat` | 均线粘住，或慢线斜率门开着但走平 |
+| `breakout too shallow` / `breakout already extended, no chase` | 穿出太少或已经走太远 |
+| `breakout bar too narrow` / `weak breakout close` / `breakout bar too wide` | K 线质量不够，或高潮棒止损太远 |
+| `donchian breakout` / `donchian breakdown` | 开多 / 开空 |
+| `ema stack flipped` / `closed through channel mid` | 均线反叉，或收盘回到通道中轨内侧 |
+| `trail stop … hit` / `time stop …` / `TP1 …` / `tp …R` | 止损、时间止损、减仓或止盈 |
+| `hold …R` | 持仓，未到 1R 时止损不动 |
+
 ---
 
 ## 代码入口
@@ -369,6 +446,7 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 |------|------|
 | `backend/internal/strategy/strategy.go` | 接口、工厂、已收盘 bar |
 | `backend/internal/strategy/trend.go` | 趋势回调 |
+| `backend/internal/strategy/breakout.go` | 趋势突破 |
 | `backend/internal/strategy/squeeze.go` | 压缩突破 |
 | `backend/internal/strategy/vegas.go` | 维加斯通道 |
 | `backend/internal/strategy/reentry.go` | 再入场锁 |
@@ -377,4 +455,4 @@ qty = min(qty, 权益 × 杠杆 × max_notional_pct / 价格)
 | `backend/internal/engine/engine.go` | 拉 K 线、执行、实盘止损 |
 | `backend/internal/risk/manager.go` | 仓位与熔断 |
 
-切换策略：改 `strategy.name` 为 `trend`、`squeeze` 或 `vegas`，重启 `cmd/trader`。vegas 使用 `strategy.vegas.interval`，默认 4h。
+切换策略：改 `strategy.name` 为 `trend`、`breakout`、`squeeze` 或 `vegas`，重启 `cmd/trader`。breakout 和 squeeze 用 `timeframes.primary`。vegas 使用 `strategy.vegas.interval`，默认 4h。

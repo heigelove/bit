@@ -122,7 +122,7 @@ func TestLoadShippedConfig(t *testing.T) {
 	if vg.Interval != "4h" {
 		t.Fatalf("vegas.interval = %q, want 4h", vg.Interval)
 	}
-	if vg.EntryMode != "pullback" || vg.BreakoutEntry() {
+	if vg.EntryMode != "breakout" || !vg.BreakoutEntry() {
 		t.Fatalf("vegas.entry_mode = %q", vg.EntryMode)
 	}
 	if vg.EMAFast != 12 || vg.EMATunnelFast != 144 || vg.EMATunnelSlow != 169 {
@@ -145,6 +145,25 @@ func TestLoadShippedConfig(t *testing.T) {
 	}
 	if !vg.StackFlipExitEnabled() {
 		t.Fatal("vegas stack-flip exit should be enabled")
+	}
+	bo := cfg.Strategy.Breakout
+	if bo.Donchian != 20 || bo.EMAFast != 20 || bo.EMASlow != 60 || bo.EMAFilter != 200 {
+		t.Fatalf("breakout channel/ema = %d %d/%d/%d", bo.Donchian, bo.EMAFast, bo.EMASlow, bo.EMAFilter)
+	}
+	if bo.ADXMin != 20 || bo.EMASepMinATR != 0.3 || bo.EMASlopeMinATR != 0 {
+		t.Fatalf("breakout gates adx %.2f sep %.2f slope %.2f", bo.ADXMin, bo.EMASepMinATR, bo.EMASlopeMinATR)
+	}
+	if bo.MinBreakATR != 0.1 || bo.BreakoutMaxATR != 1 || bo.MinRangeATR != 0.6 {
+		t.Fatalf("breakout range = %.2f/%.2f/%.2f", bo.MinBreakATR, bo.BreakoutMaxATR, bo.MinRangeATR)
+	}
+	if bo.MinStopATR != 1 || bo.MaxStopATR != 3 || bo.TrailAfterR != 1 || bo.ChandelierMult != 3 {
+		t.Fatalf("breakout stop/trail = %.2f/%.2f after %.2f mult %.2f", bo.MinStopATR, bo.MaxStopATR, bo.TrailAfterR, bo.ChandelierMult)
+	}
+	if bo.TPEnabled() || !bo.StackFlipExitEnabled() || !bo.MidLossExitEnabled() || !bo.DIFilterEnabled() || !bo.EMAFilterEnabled() {
+		t.Fatal("breakout exits/filters drifted")
+	}
+	if bo.TimeStopBars != 16 || bo.ReentryCooldown != 3 || !bo.ResetRequired() || !bo.BarConfirmRequired() {
+		t.Fatal("breakout time stop / reentry / confirm drifted")
 	}
 	if !vg.StackRequired() || !vg.FastSideRequired() || vg.FastTurnRequired() || vg.SwingRequired() || vg.ExitOnTunnelLossEnabled() {
 		t.Fatal("vegas filters drifted")
@@ -212,6 +231,20 @@ func TestFiltersDefaultOn(t *testing.T) {
 	if bare.WithDefaults().Interval != "4h" {
 		t.Fatal("omitted vegas interval must default to 4h")
 	}
+	bareBO := BreakoutConfig{}
+	filled := bareBO.WithDefaults()
+	if !bareBO.DIFilterEnabled() || !bareBO.EMAFilterEnabled() || !bareBO.BarConfirmRequired() {
+		t.Fatal("omitted breakout gates must default to enabled")
+	}
+	if !bareBO.StackFlipExitEnabled() || !bareBO.MidLossExitEnabled() || !bareBO.ResetRequired() {
+		t.Fatal("omitted breakout exits must default to enabled")
+	}
+	if bareBO.TPEnabled() {
+		t.Fatal("omitted breakout take-profit must stay off")
+	}
+	if filled.ADXMin != 20 || filled.Donchian != 20 || filled.TimeStopBars != 16 || filled.EMASlopeMinATR != 0 {
+		t.Fatalf("breakout defaults = adx %.1f donchian %d time %d slope %.2f", filled.ADXMin, filled.Donchian, filled.TimeStopBars, filled.EMASlopeMinATR)
+	}
 	tr.RequireEMA20Side = &off
 	if tr.EMA20SideRequired() {
 		t.Fatal("explicit false must disable the EMA20 side filter")
@@ -226,5 +259,19 @@ func TestValidateRejectsUnknownStrategy(t *testing.T) {
 	c.Strategy.Name = "does-not-exist"
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected validation error for unknown strategy")
+	}
+}
+
+func TestValidateRejectsBreakoutPeriodOrder(t *testing.T) {
+	c := &Config{Mode: "paper"}
+	c.Symbol.Name = "ETHUSDT"
+	c.Symbol.Leverage = 5
+	c.Risk.RiskPerTrade = 0.01
+	c.Strategy.Name = "breakout"
+	c.Strategy.Breakout.EMAFast = 60
+	c.Strategy.Breakout.EMASlow = 20
+	c.Strategy.Breakout.Donchian = 20
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected validation error when breakout ema_fast >= ema_slow")
 	}
 }
